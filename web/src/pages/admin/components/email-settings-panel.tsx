@@ -60,7 +60,7 @@ export default function EmailSettingsPanel() {
                     <Form.Item name="username" label="SMTP 用户名"><Input autoComplete="off" placeholder="通常为完整邮箱地址" /></Form.Item>
                     <Form.Item name="password" label={setting?.hasPassword ? `SMTP 密码（${configuredSecretText}）` : "SMTP 密码"}><Input.Password autoComplete="new-password" placeholder={setting?.hasPassword ? "留空保留原密码" : "SMTP 密码或授权码"} /></Form.Item>
                     <Form.Item name="fromEmail" label="发件邮箱" rules={[{ type: "email", message: "请输入有效的发件邮箱" }]}><Input placeholder="noreply@example.com" /></Form.Item>
-                    <Form.Item name="fromName" label="发件人名称"><Input placeholder="影策" /></Form.Item>
+                    <Form.Item name="fromName" label="发件人名称"><Input placeholder="巨天" /></Form.Item>
                 </div>
             </Form>
         </SettingsSectionCard>

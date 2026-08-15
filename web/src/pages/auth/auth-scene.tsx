@@ -49,7 +49,7 @@ export function AuthScene() {
     return (
         <main className="h-dvh min-h-0 overflow-y-auto bg-[#08090c] text-white lg:overflow-hidden">
             <div className="grid min-h-full lg:h-full lg:grid-cols-[minmax(0,1.32fr)_minmax(520px,1fr)]">
-                <section className="relative min-h-[250px] overflow-hidden sm:min-h-[320px] lg:min-h-0" aria-label="影策品牌影片">
+                <section className="relative min-h-[250px] overflow-hidden sm:min-h-[320px] lg:min-h-0" aria-label="巨天品牌影片">
                     <video
                         className="absolute inset-0 size-full object-cover"
                         src={AUTH_VIDEO_URL}
@@ -65,7 +65,7 @@ export function AuthScene() {
                     <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-4 p-5 sm:p-7 lg:p-9">
                         <Link to="/" className="inline-flex items-center gap-2.5 text-sm font-semibold text-white drop-shadow-sm transition-opacity hover:opacity-80">
                             <span className="size-7 bg-current" style={{ mask: "url(/logo.svg) center / contain no-repeat", WebkitMask: "url(/logo.svg) center / contain no-repeat" }} />
-                            影策
+                            巨天
                         </Link>
                         <span className="inline-flex items-center gap-2 rounded-full border border-white/16 bg-black/20 px-3 py-1.5 text-[var(--fs-label)] text-white/76 backdrop-blur-xl">
                             <Play className="size-3 fill-current" />
@@ -78,7 +78,7 @@ export function AuthScene() {
                         transition={{ duration: aceternityMotion.duration.panel, ease: aceternityMotion.easing.enter }}
                         className="absolute inset-x-0 bottom-0 max-w-2xl p-5 sm:p-7 lg:p-10"
                     >
-                        <p className="text-xs font-semibold tracking-[0.18em] text-white/58">YINGCE STUDIO</p>
+                        <p className="text-xs font-semibold tracking-[0.18em] text-white/58">JUTIAN STUDIO</p>
                         <h1 className="mt-3 max-w-xl text-3xl font-semibold leading-tight sm:text-4xl lg:text-5xl">
                             让一个故事，<br className="hidden sm:inline" />
                             从文字走向银幕。

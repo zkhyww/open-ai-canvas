@@ -958,7 +958,7 @@ function parseEventJson<T>(data: string) {
 
 function formatLogText(logs: AgentEventLog[], context: AgentLogContext) {
     const head = [
-        "影策 Canvas Agent 诊断日志",
+        "巨天 Canvas Agent 诊断日志",
         `连接: ${context.connected ? "在线" : context.enabled ? "连接中" : "未启用"}`,
         `状态: ${context.activity}`,
         `waiting: ${context.waiting}`,

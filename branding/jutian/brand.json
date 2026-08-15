@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "productName": "巨天",
+  "englishName": "Jutian",
+  "englishNameUpper": "JUTIAN",
+  "web": {
+    "title": "巨天",
+    "metaDescription": "巨天，让一个故事从文字走向银幕。面向 AI 影视与短剧创作的开源工作台。",
+    "workspaceTitle": "巨天工作台",
+    "authStudioLabel": "JUTIAN STUDIO",
+    "homeBrandLabel": "巨天",
+    "adminSubtitle": "管理后台",
+    "creationWorkbenchLabel": "巨天 · AI 影视创作工作台",
+    "assetLibraryLabel": "巨天素材库"
+  },
+  "email": {
+    "fromName": "巨天",
+    "registrationSubject": "巨天注册验证码",
+    "registrationBodyLead": "你正在注册巨天。"
+  },
+  "canvasAgent": {
+    "displayName": "巨天 Canvas Agent",
+    "localPromptLead": "你正在帮助用户操作巨天网页画布。",
+    "onlinePromptLead": "你是巨天网页内置在线画布助手。",
+    "diagnosticTitle": "巨天 Canvas Agent 诊断日志",
+    "onlineDiagnosticTitle": "巨天网站 Agent 诊断日志"
+  },
+  "export": {
+    "defaultCanvasName": "巨天画布"
+  }
+}

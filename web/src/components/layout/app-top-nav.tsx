@@ -146,9 +146,9 @@ export function AppWorkspaceShell({ children }: { children: ReactNode }) {
                         {/* 移动端：抽屉完整导航 */}
                         <div className="app-workspace-mobile-nav flex min-h-0 flex-1 flex-col overflow-hidden lg:hidden">
                             <div className="flex h-14 shrink-0 items-center gap-2 px-3">
-                                <Link to="/" className="flex min-w-0 items-center gap-2" title="影策">
+                                <Link to="/" className="flex min-w-0 items-center gap-2" title="巨天">
                                     <span className="app-workspace-brand-mark grid size-7 shrink-0 place-items-center rounded-md bg-foreground text-background"><InfinityIcon className="size-4" /></span>
-                                    <span className="truncate text-[var(--fs-body)] font-semibold">影策</span>
+                                    <span className="truncate text-[var(--fs-body)] font-semibold">巨天</span>
                                 </Link>
                             </div>
                             <nav

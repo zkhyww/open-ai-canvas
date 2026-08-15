@@ -17,11 +17,11 @@ export function WorkspaceTopBar({ sidebarOpen, onToggleSidebar }: { sidebarOpen:
                 <button type="button" className="app-workspace-topbar-icon-button" aria-label={sidebarOpen ? "收起侧栏" : "展开侧栏"} onClick={onToggleSidebar}>
                     {sidebarOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
                 </button>
-                <Link to="/" className="app-workspace-brand-link inline-flex min-w-0 items-center gap-2 text-foreground" title="影策工作台">
+                <Link to="/" className="app-workspace-brand-link inline-flex min-w-0 items-center gap-2 text-foreground" title="巨天工作台">
                     <span className="app-workspace-brand-mark grid size-7 shrink-0 place-items-center rounded-md bg-foreground text-background">
                         <InfinityIcon className="size-4" />
                     </span>
-                    <span className="app-workspace-brand-wordmark truncate text-[var(--fs-body)] font-semibold">影策</span>
+                    <span className="app-workspace-brand-wordmark truncate text-[var(--fs-body)] font-semibold">巨天</span>
                 </Link>
             </div>
             <div className="flex shrink-0 items-center gap-1">
