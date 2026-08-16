@@ -1,26 +1,35 @@
 {
   "name": "infinite-canvas",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260816113007",
   "description": "Use Codex to read and operate Jutian through the local Canvas Agent MCP server.",
   "author": {
     "name": "ddcat"
   },
   "repository": "https://github.com/zkhyww/open-ai-canvas",
   "license": "AGPL-3.0",
-  "keywords": ["infinite-canvas", "canvas", "mcp", "agent"],
+  "keywords": [
+    "infinite-canvas",
+    "canvas",
+    "mcp",
+    "agent"
+  ],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "巨天",
+    "displayName": "\u5de8\u5929",
     "shortDescription": "Use Codex to operate the current Jutian canvas.",
     "longDescription": "Connects Codex to the local Canvas Agent MCP server so Codex can inspect the current Jutian canvas, create nodes, connect flows, and trigger generation through the web canvas confirmation flow.",
     "developerName": "ddcat",
     "category": "Productivity",
-    "capabilities": ["Canvas", "MCP", "Creative Workflow"],
+    "capabilities": [
+      "Canvas",
+      "MCP",
+      "Creative Workflow"
+    ],
     "defaultPrompt": [
-      "打开巨天",
-      "读取当前画布并总结节点结构",
-      "根据选中节点创建一组生图提示词"
+      "\u6253\u5f00\u5de8\u5929",
+      "\u8bfb\u53d6\u5f53\u524d\u753b\u5e03\u5e76\u603b\u7ed3\u8282\u70b9\u7ed3\u6784",
+      "\u6839\u636e\u9009\u4e2d\u8282\u70b9\u521b\u5efa\u4e00\u7ec4\u751f\u56fe\u63d0\u793a\u8bcd"
     ],
     "brandColor": "#2563EB",
     "composerIcon": "./assets/icon.png",

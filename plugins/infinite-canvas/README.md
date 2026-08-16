@@ -64,26 +64,24 @@ codex plugin add infinite-canvas@infinite-canvas-local
 
 ## 工作机制
 
-插件默认通过以下命令启动 MCP，并会在 MCP 启动时自动尝试拉起本地 Agent：
+插件会从已注册的 `infinite-canvas-local` marketplace 定位当前巨天源码，并使用其中已构建的 Canvas Agent MCP。它不依赖未发布的公网 npm 包。
 
-```bash
-npx -y @ddcat666/open-ai-canvas-agent mcp
-```
+“巨天一键启动”负责幂等启动 Web 3000、Backend 8080 和本机 Runtime 17371。浏览器会使用签名会话连接 Runtime，无需也不应把连接令牌放入 URL。
 
 ## 手动排查
 
-优先本地启动画布：
+优先双击桌面的“巨天一键启动”，然后检查：
 
 ```bash
-cd web
-bun install
-bun run dev
+http://127.0.0.1:3000
+http://127.0.0.1:8080/api/health
+http://127.0.0.1:17371/health
 ```
 
-然后启动本地 Agent。端口不是 `3000` 时，把 `CANVAS_URL` 换成真实本地画布地址：
+插件已安装但 Codex 仍没有巨天工具时，先确认状态，再新建一个 Codex 任务：
 
 ```bash
-CANVAS_URL=http://localhost:3000 npx -y @ddcat666/open-ai-canvas-agent
+codex plugin list
 ```
 
-手动排查时先从 Agent 输出或 `http://127.0.0.1:17371/config` 读取本地地址和 token，然后直接打开 `<画布网页地址>/canvas?mode=new&agentUrl=<Local URL>&agentToken=<Connect token>`。不要通过页面点击来新建画布；`mode=new` 会让网页自动创建具体画布并连接本地 Agent。
+遇到“本机运行时请求失败”，重新运行一键启动并刷新页面。不要读取或复制 Runtime 主令牌，不要使用带 `agentToken` 的旧版深链接。

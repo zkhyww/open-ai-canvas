@@ -1,8 +1,15 @@
 {
   "mcpServers": {
     "infinite-canvas": {
-      "command": "npx",
-      "args": ["-y", "@ddcat666/open-ai-canvas-agent", "mcp"],
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$row = codex plugin marketplace list | Where-Object { $_ -match '^infinite-canvas-local\\s+' } | Select-Object -First 1; if (-not $row) { throw 'Jutian marketplace is not registered.' }; $root = ($row -replace '^infinite-canvas-local\\s+', '').Trim(); $entry = Join-Path $root 'canvas-agent\\dist\\index.js'; if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) { throw 'Jutian Canvas Agent is not built.' }; & node $entry mcp; exit $LASTEXITCODE"
+      ],
       "startup_timeout_sec": 20,
       "tool_timeout_sec": 90
     }

@@ -5,32 +5,30 @@ description: 打开巨天网页画布并自动连接本地 Canvas Agent。用户
 
 # 打开巨天画布
 
-当用户要求打开、启动、进入或使用巨天时，不要把 URL 交给用户手动复制，不要通过浏览器点击“新建画布”。优先快速拉起本地画布和本地 Canvas Agent，然后直接打开带 `mode`、`agentUrl`、`agentToken` 的 URL，让网页自动创建或选择画布并连接 Agent。
+当用户要求打开、启动、进入或使用巨天时，优先复用已配置的巨天一键启动器，再打开本地画布。新版本地 Runtime 由浏览器通过签名会话自动连接；不读取、不输出、不复制任何连接令牌，也不将令牌写入 URL。
 
 ## 默认打开方式
 
-- 新建画布：`<画布网页地址>/canvas?mode=new&agentUrl=<Local URL>&agentToken=<Connect token>`
-- 最近画布：`<画布网页地址>/canvas?mode=recent&agentUrl=<Local URL>&agentToken=<Connect token>`
-- 自己选择：`<画布网页地址>/canvas?mode=choose&agentUrl=<Local URL>&agentToken=<Connect token>`
+- 新建画布：`<画布网页地址>/canvas?mode=new`
+- 最近画布：`<画布网页地址>/canvas?mode=recent`
+- 自己选择：`<画布网页地址>/canvas?mode=choose`
 
 默认打开新建本地画布；只有用户明确要求线上地址、最近画布或自己选择时，才改用对应模式。
 
 ## 工作流
 
-1. 如果当前仓库是巨天项目，优先使用当前仓库的 `web/` 前端。
-2. 先检查本地端口归属：如果 `3000`、`3001` 等端口已被占用，必须用 `lsof`/`ps` 或服务输出确认监听进程的工作目录属于当前仓库的 `web/`，不能只因为端口存在就当成本地画布。
-3. 如果已有当前仓库的 Next dev 服务，复用它并记录真实画布地址，例如 `http://localhost:3001`。
-4. 如果没有当前仓库的服务，启动本地画布开发服务，默认在 `web/` 下运行 `bun run dev`；若默认端口被其他项目占用，改用空闲端口启动，例如 `bunx next dev --webpack -H 0.0.0.0 -p <空闲端口>`。不要执行构建或测试。
-5. 启动本地 Canvas Agent，必须带上第 3/4 步得到的真实画布地址：`CANVAS_URL=<真实画布地址> npx -y @ddcat666/open-ai-canvas-agent`。如果 Agent 已经在运行，则读取 `~/.infinite-canvas/canvas-agent.json` 或启动输出获取 `Local URL` 和 token。
-6. 读取 Agent 输出或配置中的 `Local URL` 和 `Connect token`，不要让用户手动复制。
-7. 不走本地 Agent 的 `/open` 跳转；直接构造并打开最终 URL：`<真实画布地址>/canvas?mode=new&agentUrl=<Local URL>&agentToken=<Connect token>`。
-8. 画布网页会自动新建具体画布、打开本机 Agent 面板并连接本地 Agent；不要用浏览器点击新建画布。
-9. 打开后再使用 `canvas_get_state` 检查画布是否已经连接；如果尚未连接，等待片刻再检查，不要改用线上站点，除非用户明确要求。
+1. 用 `codex plugin marketplace list` 确认 `infinite-canvas-local` 的本地仓库根目录，不从其他工作目录猜测路径。
+2. 优先运行该机已配置的“巨天一键启动”。它必须复用已知数据目录，并幂等启动 Web 3000、Backend 8080 和本机 Runtime 17371；不要为了“能打开”而启动一套新数据库。
+3. 启动器缺失时，停下并说明需要先完成当前电脑的本地启动配置；不回退到未发布的 npm 包，不临时创建新数据目录。
+4. 验证 `http://127.0.0.1:3000`、`http://127.0.0.1:8080/api/health` 和 `http://127.0.0.1:17371/health` 均可用；端口被占用时必须核对进程归属，不结束未知进程。
+5. 直接打开目标画布 URL，默认为 `http://127.0.0.1:3000/canvas?mode=new`。如果跳转到登录页，让用户完成正常登录，不绕过账号校验。
+6. 页面会用浏览器本机密钥与 Runtime 建立签名会话。禁止添加 `agentUrl`、`agentToken` 查询参数，也禁止读取 Runtime 主令牌。
+7. 打开后使用 `canvas_get_state` 检查画布是否已连接。如果尚未连接，先重新运行一键启动并刷新页面；不改用线上站点，除非用户明确要求。
 
 ## 用户只安装插件时
 
-- 如果当前工作区不是巨天源码仓库，优先提示用户先打开或启动巨天网页，再连接本地 Agent。
-- 可以使用线上画布地址或用户给出的本地地址作为 `<画布网页地址>`，但仍要通过本地 Canvas Agent 获取 token 后再打开最终 URL。
-- 不要假设用户已经安装本仓库依赖；插件的 MCP 会通过 `npx -y @ddcat666/open-ai-canvas-agent mcp` 使用已发布的 Canvas Agent。
+- 即使当前工作区不是巨天源码仓库，也应从已注册的 `infinite-canvas-local` marketplace 定位巨天，不要用当前目录代替。
+- 插件的 MCP 入口来自该本地 marketplace 中的 `canvas-agent/dist/index.js`，不依赖公网 npm 包。
+- 线上 Web 是另一种部署形态；本技能不自动将本机 Runtime 暴露到公网，不创建公网隧道。
 
-不要要求用户手动填写 URL、token 或复制 JSON。
+不要要求用户手动填写 Runtime URL、token 或复制 JSON。
