@@ -105,6 +105,38 @@ describe("public channel model catalog", () => {
         });
     });
 
+    test("treats endpoint-only video metadata as authoritative without inventing 720P", async () => {
+        const catalog: ChannelModelCatalogItem = {
+            id: "endpoint-video",
+            supportedEndpointTypes: ["openai-video"],
+        };
+        const config = configForCatalog([catalog], { videoSeconds: "6", size: "16:9", vquality: "720" });
+        const model = "flow::endpoint-video";
+        const cost = config.channels[0]!.modelCosts![0]!;
+
+        expect(cost.capability).toBe("video");
+        expect(cost.protocol).toBe("newapi-channel-2");
+        expect(cost.capabilityConfig?.video?.resolutions).toEqual([]);
+        expect(cost.capabilityConfig?.video?.defaultResolution).toBe("");
+        expect(selectableModelsByCapability(config, "video")).toEqual([model]);
+        expect(resolveModelRequestConfig(config, model).interfaceType).toBe("newapi-channel-2");
+
+        const canvasHtml = renderToStaticMarkup(React.createElement(CanvasVideoSettingsPopover, { config, onConfigChange: () => undefined }));
+        expect(canvasHtml).not.toContain("720P");
+
+        const createSource = await Bun.file(new URL("../src/pages/create/index.tsx", import.meta.url)).text();
+        expect(createSource).toContain('const videoResolutionSupported = props.mode === "video" && resolutions.length > 0;');
+        expect(createSource).toContain("...(videoResolutionSupported ? [videoResolutionLabel(props.videoQuality)] : [])");
+
+        let requestBody: Record<string, unknown> = {};
+        axios.post = (async (_url: string, body: Record<string, unknown>) => {
+            requestBody = body;
+            return { data: { id: "endpoint-video-task" } };
+        }) as typeof axios.post;
+        await createVideoGenerationTask(config, "synthetic prompt");
+        expect(requestBody).not.toHaveProperty("resolution");
+    });
+
     test("preserves a manually configured capability profile when a catalog only returns an ID", () => {
         const channel = createModelChannel({
             id: "manual",
@@ -154,6 +186,42 @@ describe("public channel model catalog", () => {
         const costs = mergeFetchedChannelModelCosts(channel, [{ id: "manual-video", displayName: "Catalog Video" }]);
 
         expect(costs[0]).toEqual({ ...existing, displayName: "Catalog Video" });
+    });
+
+    test("uses modelType only for capability and preserves an existing manual protocol and profile", () => {
+        const channel = createModelChannel({
+            id: "manual-partial",
+            name: "Manual Partial",
+            baseUrl: "https://manual.example",
+            apiKey: "synthetic-test-key",
+            apiFormat: "openai",
+            interfaceType: "chat-completion",
+            models: ["video-x"],
+        });
+        const capabilityConfig = defaultModelCapabilityConfig("gemini-veo", "video-x");
+        capabilityConfig.video!.resolutions = ["1440p"];
+        capabilityConfig.video!.defaultResolution = "1440p";
+        channel.modelCosts = [{ model: "video-x", capability: "video", protocol: "gemini-veo", billingMode: "per_second", unitPriceMicrocredits: 7654, capabilityConfig }];
+
+        const costs = mergeFetchedChannelModelCosts(channel, [{ id: "video-x", modelType: "video" }]);
+
+        expect(costs).toEqual(channel.modelCosts);
+    });
+
+    test("requires the declared minimum image count and selects image-to-video", async () => {
+        const catalog: ChannelModelCatalogItem = {
+            id: "image-required-video",
+            modelType: "video",
+            minImages: 1,
+            maxImages: 2,
+        };
+        const config = configForCatalog([catalog]);
+        const profile = config.channels[0]!.modelCosts![0]!.capabilityConfig!.video!;
+
+        expect(profile.references).toMatchObject({ minImages: 1, maxImages: 2 });
+        expect(profile.operations).toEqual(["image_to_video"]);
+        expect(profile.defaultOperation).toBe("image_to_video");
+        expect(createVideoGenerationTask(config, "synthetic prompt")).rejects.toThrow("至少需要 1 张参考图");
     });
 
     test("preserves an ID-only manual video model cost when both protocol sources are missing", () => {
