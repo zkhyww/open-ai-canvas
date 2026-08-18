@@ -331,8 +331,8 @@ foreach ($approvedTarget in $approvedTargetList) {
         throw "品牌规则缺少批准目标: $approvedTarget"
     }
 }
-if ($totalOldBrandLiterals -ne 42 -or $totalNewBrandLiterals -ne 42) {
-    throw "品牌规则必须精确覆盖 42 个旧/新品牌字面量"
+if ($totalOldBrandLiterals -ne 45 -or $totalNewBrandLiterals -ne 45) {
+    throw "品牌规则必须精确覆盖 45 个旧/新品牌字面量"
 }
 
 $fileStates = @{}

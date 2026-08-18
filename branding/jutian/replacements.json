@@ -142,6 +142,27 @@
       "userVisible": true
     },
     {
+      "target": "web/src/pages/create/index.tsx",
+      "old": "<strong>{mode === \"image\" ? \"图像生成\" : mode === \"video\" ? \"视频生成\" : \"影策 AI\"}</strong>",
+      "new": "<strong>{mode === \"image\" ? \"图像生成\" : mode === \"video\" ? \"视频生成\" : \"巨天 AI\"}</strong>",
+      "expectedCount": 1,
+      "userVisible": true
+    },
+    {
+      "target": "web/src/pages/create/index.tsx",
+      "old": "<span className=\"creation-message-progress-copy\">{item.status === \"pending\" ? `影策正在生成${mode === \"video\" ? \"视频\" : \"图像\"}……`",
+      "new": "<span className=\"creation-message-progress-copy\">{item.status === \"pending\" ? `巨天正在生成${mode === \"video\" ? \"视频\" : \"图像\"}……`",
+      "expectedCount": 1,
+      "userVisible": true
+    },
+    {
+      "target": "web/src/pages/create/index.tsx",
+      "old": "<span className=\"sr-only\">影策正在生成{mode === \"video\" ? \"视频\" : \"图像\"}</span>",
+      "new": "<span className=\"sr-only\">巨天正在生成{mode === \"video\" ? \"视频\" : \"图像\"}</span>",
+      "expectedCount": 1,
+      "userVisible": true
+    },
+    {
       "target": "web/src/pages/admin/components/admin-shell.tsx",
       "old": "<Link to=\"/\" className=\"flex min-w-0 flex-1 items-center gap-2\" title=\"影策\">",
       "new": "<Link to=\"/\" className=\"flex min-w-0 flex-1 items-center gap-2\" title=\"巨天\">",

@@ -853,8 +853,8 @@ foreach ($approvedTarget in $approvedTargetList) {
         Add-Failure "品牌规则缺少批准目标: $approvedTarget"
     }
 }
-if ($totalLiterals -ne 42) {
-    Add-Failure "品牌规则必须精确覆盖 42 个品牌字面量"
+if ($totalLiterals -ne 45) {
+    Add-Failure "品牌规则必须精确覆盖 45 个品牌字面量"
 }
 
 foreach ($fullPath in $visiblePaths) {
