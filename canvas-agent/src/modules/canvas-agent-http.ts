@@ -40,8 +40,16 @@ export function createCanvasAgentHttpModule(
             );
         }, { queryKeys: ["clientId"], lastEventId: true }),
         canvasRoute("POST", "/canvas/state", (req, res) => {
-            session.updateState(jsonBody(req), queryValue(req, "clientId") || undefined);
-            res.json({ ok: true });
+            const result = session.updateState(jsonBody(req), queryValue(req, "clientId") || undefined);
+            if (!result) {
+                res.json({ ok: true });
+                return;
+            }
+            if (result && !result.accepted) {
+                res.status(409).json({ ok: false, ...result });
+                return;
+            }
+            res.json({ ok: true, ...result });
         }, { queryKeys: ["clientId"] }),
         canvasRoute("POST", "/canvas/result", (req, res) => {
             session.resolveResult(jsonBody(req) as { requestId?: string; error?: string; result?: unknown });
@@ -112,6 +120,7 @@ export function createCanvasAgentHttpModule(
             const attachments = Array.isArray(body.attachments)
                 ? body.attachments as AgentAttachment[]
                 : [];
+            const skills = parseAgentSkills(body.skills);
             const workspace = ensureCanvasWorkspace(config, String(body.canvasId || ""));
             let threadId = String(body.threadId || workspace.activeThreadId || "");
             void (async () => {
@@ -128,6 +137,7 @@ export function createCanvasAgentHttpModule(
                     emit,
                     attachments,
                     {
+                        skills,
                         threadId,
                         cwd: workspace.workspacePath,
                         onThreadId: (nextThreadId) => updateCanvasWorkspace(
@@ -202,6 +212,61 @@ function jsonRecord(req: Request) {
         throw new Error("Canvas request body is invalid");
     }
     return value as Record<string, unknown>;
+}
+
+export function parseAgentSkills(value: unknown) {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 8).flatMap((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const input = item as Record<string, unknown>;
+        const name = typeof input.name === "string" ? input.name.trim().slice(0, 120) : "";
+        const instruction = typeof input.instruction === "string" ? input.instruction.trim().slice(0, 24_000) : "";
+        const files = parseAgentSkillFiles(input.files);
+        if (!name || (!instruction && !files.length)) return [];
+        return [{
+            ...(typeof input.skillId === "string" ? { skillId: input.skillId.trim().slice(0, 120) } : {}),
+            name,
+            ...(typeof input.description === "string" ? { description: input.description.trim().slice(0, 500) } : {}),
+            ...(typeof input.version === "string" ? { version: input.version.trim().slice(0, 120) } : {}),
+            ...(files.length ? { files } : { instruction }),
+        }];
+    });
+}
+
+function parseAgentSkillFiles(value: unknown) {
+    if (!Array.isArray(value)) return [];
+    const files: Array<{ path: string; mimeType?: string; contentBase64: string }> = [];
+    const paths = new Set<string>();
+    let totalBytes = 0;
+    for (const item of value.slice(0, 512)) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const input = item as Record<string, unknown>;
+        const filePath = typeof input.path === "string" ? normalizeAgentSkillPath(input.path) : "";
+        const contentBase64 = typeof input.contentBase64 === "string" ? input.contentBase64.trim() : "";
+        if (!filePath || paths.has(filePath) || !validBase64(contentBase64)) return [];
+        const size = Buffer.from(contentBase64, "base64").byteLength;
+        if (size > 8 * 1024 * 1024) return [];
+        totalBytes += size;
+        if (totalBytes > 20 * 1024 * 1024) return [];
+        paths.add(filePath);
+        files.push({
+            path: filePath,
+            ...(typeof input.mimeType === "string" ? { mimeType: input.mimeType.trim().slice(0, 255) } : {}),
+            contentBase64,
+        });
+    }
+    return files.some((file) => file.path === "SKILL.md") ? files : [];
+}
+
+function normalizeAgentSkillPath(value: string) {
+    const normalized = value.trim().replace(/\\/g, "/");
+    const segments = normalized.split("/");
+    if (!normalized || normalized.startsWith("/") || normalized.length > 1000 || segments.some((segment) => !segment || segment === "." || segment === "..") || normalized.includes("\0")) return "";
+    return normalized;
+}
+
+function validBase64(value: string) {
+    return value.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(value);
 }
 
 function queryValue(req: Request, key: string) {

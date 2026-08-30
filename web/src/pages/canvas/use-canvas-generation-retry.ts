@@ -12,6 +12,7 @@ import {
     createGenerationRetryContext,
     findRetrySourceNode,
     generationReferenceUrls,
+    generationWorkflowMetadata,
     isGenerationCanceled,
     canvasImageReferenceLimitError,
     resolveMetadataReferences,
@@ -21,18 +22,19 @@ import {
     sourceNodeReferenceImages,
     supportsVideoReferenceAudio,
 } from "@/lib/canvas/canvas-project-generation";
-import { expandSkillMentions } from "@/lib/canvas/canvas-skill-mentions";
+import { isCanvasWorkflowProvider } from "@/lib/canvas/canvas-workflow";
 import { buildPortraitTexturePrompt } from "@/lib/canvas/canvas-portrait-texture";
 import { resolveCanvasStyleExecution } from "@/lib/canvas/canvas-style-execution";
 import { generationFailureMetadata, unchangedModeratedPrompt } from "@/lib/generation-error";
 import { modelCapabilityConfigFor } from "@/lib/model-capabilities";
 import { navigateToSettings } from "@/lib/settings-navigation";
 import type { Skill } from "@/services/api/skills";
+import { skillRuntime, type SkillRuntimeMetadata } from "@/services/skill-runtime";
 import type { GenerationTask } from "@/services/api/task-center";
 import { resolveImageUrl } from "@/services/image-storage";
 import { resolveModelRequestConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import type { Asset } from "@/stores/use-asset-store";
-import { CanvasNodeType, type CanvasConnection, type CanvasNodeData } from "@/types/canvas";
+import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeTypeId } from "@/types/canvas";
 
 type UseCanvasGenerationRetryOptions = {
     projectId: string;
@@ -82,17 +84,19 @@ export function useCanvasGenerationRetry({
             const batchRoot = node.metadata?.batchRootId ? nodesRef.current.find((item) => item.id === node.metadata?.batchRootId) : null;
             const savedImageMetadata = node.type === CanvasNodeType.Image ? { ...batchRoot?.metadata, ...node.metadata } : undefined;
             const hasSavedImageMetadata = Boolean(savedImageMetadata?.generationType);
+            const generationSourceNode = node.type === CanvasNodeType.Config && isCanvasWorkflowProvider(node.metadata) || node.metadata?.workflowProvider === "model" ? node : sourceNode;
+            const sourceGenerationConfig = buildGenerationConfig(effectiveConfig, generationSourceNode, retryMode);
             let generationConfig =
                 hasSavedImageMetadata && savedImageMetadata
                     ? {
-                          ...effectiveConfig,
-                          model: savedImageMetadata.model || effectiveConfig.imageModel || effectiveConfig.model,
-                          quality: savedImageMetadata.quality || effectiveConfig.quality,
-                          size: savedImageMetadata.size || effectiveConfig.size,
-                          transparentBackground: (savedImageMetadata.transparentBackground || effectiveConfig.transparentBackground) === "true" ? "true" : "false",
+                          ...sourceGenerationConfig,
+                          model: savedImageMetadata.model || effectiveConfig.imageModel || effectiveConfig.model || sourceGenerationConfig.model,
+                          quality: savedImageMetadata.quality || effectiveConfig.quality || sourceGenerationConfig.quality,
+                          size: savedImageMetadata.size || effectiveConfig.size || sourceGenerationConfig.size,
+                          transparentBackground: (savedImageMetadata.transparentBackground || effectiveConfig.transparentBackground || sourceGenerationConfig.transparentBackground) === "true" ? "true" : "false",
                           count: "1",
                       }
-                    : { ...buildGenerationConfig(effectiveConfig, sourceNode, retryMode), count: "1" };
+                    : { ...sourceGenerationConfig, count: "1" };
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 navigateToSettings({ continueCreation: true });
                 return;
@@ -118,7 +122,22 @@ export function useCanvasGenerationRetry({
                 setNodes((current) => current.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, ...failure } } : item)));
                 return;
             }
-            const context = rawContext ? { ...rawContext, prompt: retryMode === "video" ? rawContext.prompt : expandSkillMentions(rawContext.prompt, addedSkills) } : null;
+            let skillMetadata: SkillRuntimeMetadata = {
+                skillIds: node.metadata?.skillIds || [],
+                skillVersions: node.metadata?.skillVersions || [],
+                skillFiles: node.metadata?.skillFiles || [],
+            };
+            let context = rawContext;
+            if (rawContext) {
+                try {
+                    const skillExecution = await skillRuntime.prepare({ profile: "canvas", prompt: rawContext.prompt, skills: addedSkills });
+                    context = { ...rawContext, prompt: skillExecution.prompt };
+                    skillMetadata = skillExecution.metadata;
+                } catch (error) {
+                    message.error(error instanceof Error ? error.message : "技能上下文加载失败");
+                    return;
+                }
+            }
             const prompt = (context?.characterReferences.length ? context.prompt : savedImageMetadata?.prompt || context?.prompt || "").trim();
             if (!prompt) {
                 message.warning("找不到提示词，无法重试");
@@ -201,7 +220,7 @@ export function useCanvasGenerationRetry({
                     : undefined;
 
             setRunningNodeId(node.id);
-            setNodes((current) => current.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined, generationErrorCode: undefined, failedPromptFingerprint: undefined } } : item)));
+            setNodes((current) => current.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined, generationErrorCode: undefined, resourceReloadAvailable: undefined, failedPromptFingerprint: undefined } } : item)));
             const controller = startGenerationRequest(node.id, sourceNode.id, node.id);
             const retryContext = node.metadata?.taskId ? await createGenerationRetryContext(node.metadata.taskId, node.metadata.attemptGroupId) : {};
             const runAndConsumeRetry = async (input: Parameters<typeof runBackendCanvasGenerationTask>[0]) => {
@@ -231,7 +250,7 @@ export function useCanvasGenerationRetry({
                     return;
                 }
                 if (node.type === CanvasNodeType.Video) {
-                    const videoGenerationMetadata = buildVideoGenerationMetadata(node, videoContext);
+                    const videoGenerationMetadata = buildVideoGenerationMetadata(node, videoContext, generationConfig);
                     setNodes((current) =>
                         current.map((item) =>
                             item.id === node.id
@@ -248,6 +267,7 @@ export function useCanvasGenerationRetry({
                                           watermark: generationConfig.videoWatermark,
                                           ...videoGenerationMetadata,
                                           ...styleMetadata,
+                                          ...skillMetadata,
                                           references: videoContext ? generationReferenceUrls(videoContext) : item.metadata?.references,
                                       },
                                   }
@@ -273,6 +293,7 @@ export function useCanvasGenerationRetry({
                             promptTemplateVariables: node.metadata?.promptTemplateVariables,
                             ...videoGenerationMetadata,
                             ...styleMetadata,
+                            ...skillMetadata,
                         },
                     });
                     return;
@@ -315,7 +336,7 @@ export function useCanvasGenerationRetry({
                             item.id === node.id
                                 ? {
                                       ...item,
-                                      metadata: { ...item.metadata, prompt: providerPrompt, ...generationMetadata, ...styleMetadata, emotionEdit: nextEmotionEdit },
+                                      metadata: { ...item.metadata, prompt: providerPrompt, ...generationMetadata, ...styleMetadata, ...skillMetadata, emotionEdit: nextEmotionEdit },
                                   }
                                 : item,
                         ),
@@ -329,7 +350,7 @@ export function useCanvasGenerationRetry({
                         referenceImages: [editReference, characterReference],
                         mask,
                         signal: controller.signal,
-                        metadata: { retry: true, sourceNodeId: emotionSource.id, edit: "emotion", emotionEditMode: editPlan.mode, emotion: nextEmotionEdit, resolvedCharacterVersions: context?.resolvedCharacterVersions || [], ...styleMetadata },
+                        metadata: { retry: true, sourceNodeId: emotionSource.id, edit: "emotion", emotionEditMode: editPlan.mode, emotion: nextEmotionEdit, resolvedCharacterVersions: context?.resolvedCharacterVersions || [], ...styleMetadata, ...skillMetadata },
                     });
                     return;
                 }
@@ -343,6 +364,7 @@ export function useCanvasGenerationRetry({
                           transparentBackground: generationConfig.transparentBackground,
                           count: savedImageMetadata.count || 1,
                           references: savedImageMetadata.references,
+                          ...generationWorkflowMetadata(generationConfig),
                       }
                     : buildImageGenerationMetadata(useReferenceImages ? "edit" : "generation", generationConfig, 1, retryImages);
                 setNodes((current) =>
@@ -350,7 +372,7 @@ export function useCanvasGenerationRetry({
                         item.id === node.id
                             ? {
                                   ...item,
-                                  metadata: { ...item.metadata, prompt: mediaPrompt, ...generationMetadata, ...styleMetadata },
+                                  metadata: { ...item.metadata, prompt: mediaPrompt, ...generationMetadata, ...styleMetadata, ...skillMetadata },
                               }
                             : item,
                     ),
@@ -370,6 +392,7 @@ export function useCanvasGenerationRetry({
                         promptTemplateOperation: node.metadata?.promptTemplateOperation,
                         promptTemplateVariables: node.metadata?.promptTemplateVariables,
                         ...styleMetadata,
+                        ...skillMetadata,
                     },
                 });
             } catch (error) {
@@ -387,7 +410,7 @@ export function useCanvasGenerationRetry({
 }
 
 // 生成类型必须由明确的节点契约决定，未知节点不能降级成图片任务。
-function retryModeForNode(type: CanvasNodeType): CanvasNodeGenerationMode | null {
+function retryModeForNode(type: CanvasNodeTypeId): CanvasNodeGenerationMode | null {
     if (type === CanvasNodeType.Text) return "text";
     if (type === CanvasNodeType.Image) return "image";
     if (type === CanvasNodeType.Video) return "video";

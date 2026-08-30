@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { App, Button, Form, Input, Modal, Select } from "antd";
 import { ArrowRight, BookOpenText, FileText, FolderKanban, Images, LayoutGrid, Palette, Plus, Search, Sparkles, Trash2 } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router";
@@ -7,6 +7,7 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import { CollectionGrid, ListToolbar, PageHeader, WorkspacePage } from "@/components/layout/workspace-page";
 import { WorkspaceErrorState, WorkspaceLoadingState, WorkspaceState } from "@/components/layout/workspace-state";
 import { CanvasStylePickerModal, resolveCanvasStylePreset, resolveProjectCanvasStyle, type CanvasStylePreset } from "@/components/canvas/canvas-style-picker-modal";
+import { resourceFileUrl } from "@/services/api/resources";
 import { ModelPicker } from "@/components/model-picker";
 import { createStyleProfileSnapshot, parseStyleProfile, serializeStyleProfile } from "@/lib/canvas/style-profile";
 import { projectSummaryCompletion, projectSummaryStage } from "@/lib/project-workbench";
@@ -44,7 +45,6 @@ export default function ProjectsPage() {
     const [generating, setGenerating] = useState(false);
     const [generationStatus, setGenerationStatus] = useState("");
     const [generationPreview, setGenerationPreview] = useState("");
-    const generationAbortRef = useRef<AbortController | null>(null);
     const createOpen = searchParams.get("create") === "1";
     const setCreateOpen = (open: boolean) => {
         const next = new URLSearchParams(searchParams);
@@ -86,8 +86,6 @@ export default function ProjectsPage() {
         setGenerating(true);
         setGenerationStatus("正在创建项目…");
         setGenerationPreview("");
-        const controller = new AbortController();
-        generationAbortRef.current = controller;
         try {
             const project = await createUniqueProjectName(story, selectedStyle);
             setGenerationStatus("AI 正在生成故事大纲与章节…");
@@ -100,7 +98,6 @@ export default function ProjectsPage() {
                 (text) => {
                     setGenerationPreview(text);
                 },
-                { signal: controller.signal },
             );
             const parsed = parseGeneratedStory(answer);
             if (!parsed.chapters.length) throw new Error("AI 没有返回有效的章节内容，请重试");
@@ -109,19 +106,21 @@ export default function ProjectsPage() {
             await queryClient.invalidateQueries({ queryKey: ["projects"] });
             navigate(`/projects/${project.project.id}/overview`);
         } catch (error) {
-            if (controller.signal.aborted) {
-                message.info("已停止生成");
-            } else {
-                message.error(error instanceof Error ? error.message : "AI 生成失败，请重试");
-            }
+            message.error(error instanceof Error ? error.message : "AI 生成失败，请重试");
         } finally {
-            generationAbortRef.current = null;
             setGenerating(false);
             setGenerationStatus("");
             setGenerationPreview("");
         }
     };
-    const query = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+    const loadMoreRef = useRef<HTMLDivElement>(null);
+    const query = useInfiniteQuery({
+        // 分页查询和画布页的全量项目查询不能共用缓存形状，否则两个页面会互相覆盖缓存数据。
+        queryKey: ["projects", "paged"],
+        queryFn: ({ pageParam }) => listProjects({ page: pageParam, pageSize: 50 }),
+        initialPageParam: 1,
+        getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.page + 1 : undefined),
+    });
     const mutation = useMutation({
         mutationFn: createProject,
         onSuccess: ({ project }) => {
@@ -142,16 +141,17 @@ export default function ProjectsPage() {
     const confirmDeleteProject = (projectId: string, name: string) => {
         modal.confirm({
             title: "删除项目",
-            content: `确定删除「${name}」吗？项目内的章节、画布与资产将一并删除，此操作不可撤销。`,
+            content: `确定删除「${name}」吗？项目章节、画布关联和素材归属将一并移除；独立画布与素材库原始素材会保留。此操作不可撤销。`,
             okText: "删除",
             okButtonProps: { danger: true, loading: deleteMutation.isPending },
             cancelText: "取消",
             onOk: () => deleteMutation.mutate(projectId),
         });
     };
+    const allProjects = useMemo(() => query.data?.pages.flatMap((page) => page.projects) || [], [query.data]);
     const rows = useMemo(() => {
         const normalizedKeyword = keyword.trim().toLowerCase();
-        return [...(query.data?.projects || [])]
+        return [...allProjects]
             .filter(({ project }) => status === "all" || project.status === status)
             .filter(({ project }) => !normalizedKeyword || `${project.name} ${project.description} ${project.stylePresetId} ${parseStyleProfile(project.styleProfileJson)?.title || resolveCanvasStylePreset(project.stylePresetId)?.title || ""}`.toLowerCase().includes(normalizedKeyword))
             .sort((left, right) => {
@@ -159,17 +159,23 @@ export default function ProjectsPage() {
                 if (sort === "progress") return projectSummaryCompletion(right) - projectSummaryCompletion(left);
                 return right.project.updatedAt.localeCompare(left.project.updatedAt);
             });
-    }, [keyword, query.data, sort, status]);
+    }, [allProjects, keyword, sort, status]);
+    const totalProjectCount = query.data?.pages[0]?.total ?? allProjects.length;
+    useEffect(() => {
+        const node = loadMoreRef.current;
+        if (!node || !query.hasNextPage || query.isError) return;
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (entry?.isIntersecting && !query.isFetchingNextPage) void query.fetchNextPage();
+            },
+            { rootMargin: "600px" },
+        );
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, [query.fetchNextPage, query.hasNextPage, query.isError, query.isFetchingNextPage]);
+    const hasInitialError = query.isError && !query.data;
     return (
         <WorkspacePage className="library-page" grid>
-            <div className="studio-band">
-                <PageHeader
-                    title="短剧创作"
-                    description="从故事出发，推进章节、画布与镜头。"
-                    meta={<span className="app-projects-header-meta">{rows.length} 个</span>}
-                    actions={null}
-                />
-            </div>
             <section className="app-story-create-panel mt-4" aria-label="开始一部新短剧">
                 <div className="app-story-create-head">
                     <div className="app-story-create-title">
@@ -226,14 +232,17 @@ export default function ProjectsPage() {
                 <Select className="w-32" value={sort} onChange={setSort} options={[{ label: "最近更新", value: "updated" }, { label: "章节进度", value: "progress" }, { label: "项目名称", value: "name" }]} />
             </ListToolbar>
 
-            {query.isError ? <WorkspaceErrorState description={query.error instanceof Error ? query.error.message : "项目列表加载失败"} onRetry={() => void query.refetch()} /> : null}
+            {hasInitialError ? <WorkspaceErrorState description={query.error instanceof Error ? query.error.message : "项目列表加载失败"} onRetry={() => void query.refetch()} /> : null}
             {query.isLoading ? <WorkspaceLoadingState label="正在整理项目" detail="读取章节、画布与资产进度" /> : null}
-            {!query.isLoading && !query.isError && rows.length ? (
+            {!query.isLoading && !hasInitialError && rows.length ? (
                 <CollectionGrid className="library-grid project-library-grid">
                     {rows.map((row) => <ProjectRow key={row.project.id} row={row} onDelete={() => confirmDeleteProject(row.project.id, row.project.name)} />)}
                 </CollectionGrid>
             ) : null}
-            {!query.isLoading && !rows.length && !query.isError && (keyword || status !== "all") ? (
+            {!query.isLoading && !hasInitialError ? <div ref={loadMoreRef} className="library-load-more" aria-live="polite">
+                {query.isFetchingNextPage ? "正在加载更多项目…" : query.isError ? <button type="button" onClick={() => void query.fetchNextPage()}>加载更多失败，点击重试</button> : query.hasNextPage ? "继续下滑加载更多（每页 50 条）" : allProjects.length ? `已加载全部 ${totalProjectCount} 个项目` : null}
+            </div> : null}
+            {!query.isLoading && !rows.length && !hasInitialError && (keyword || status !== "all") ? (
                 <WorkspaceState
                     icon="projects"
                     title={keyword || status !== "all" ? "没有匹配的项目" : "创建第一个故事项目"}
@@ -294,7 +303,6 @@ export default function ProjectsPage() {
                         <div className="app-story-generating-preview-head"><span>实时草稿</span><span className="app-story-generating-live" /><em>{generationPreview ? "正在输出" : "等待模型输出"}</em></div>
                         <pre>{generationPreview}</pre>
                     </div>
-                    <div className="app-story-generating-actions"><Button onClick={() => generationAbortRef.current?.abort()}>停止</Button></div>
                 </div>
             </Modal>
         </WorkspacePage>
@@ -366,7 +374,7 @@ function ProjectRow({ row, onDelete }: { row: ProjectSummary; onDelete: () => vo
     const stage = projectSummaryStage(row);
     const projectStyle = resolveProjectCanvasStyle(row.project.stylePresetId, row.project.styleProfileJson);
     const styleTitle = projectStyle?.title || parseStyleProfile(row.project.styleProfileJson)?.title || resolveCanvasStylePreset(row.project.stylePresetId)?.title || (row.project.stylePresetId ? "自定义画风" : "未设置画风");
-    const coverUrl = projectStyle?.imageUrl;
+    const coverUrl = row.project.coverResourceId ? resourceFileUrl(row.project.coverResourceId) : projectStyle?.imageUrl;
     return (
         <Link to={`/projects/${row.project.id}/overview`} className="library-card project-library-card group">
             <span className="project-library-cover">

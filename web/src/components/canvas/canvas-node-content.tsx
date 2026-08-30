@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
-import { AlertCircle, BookOpenCheck, Clock3, FileText, Image as ImageIcon, LoaderCircle, Music2, Pencil, Play, RefreshCw, Square, Video } from "lucide-react";
+import { AlertCircle, BookOpenCheck, Clock3, Download, FileText, Image as ImageIcon, LoaderCircle, Music2, Pencil, Play, RefreshCw, Video } from "lucide-react";
 
 import { VideoPlayer } from "@/components/video-player";
 import { CONTENT_MODERATION_ERROR_CODE, generationErrorMessage, isContentModerationError } from "@/lib/generation-error";
 import { generationTaskShowsProgress, generationTaskStageLabel, generationTaskStatusLabel, isGenerationTaskSubmissionUncertain } from "@/lib/generation-task-display";
 import { canvasRichTextHTML } from "@/lib/canvas/canvas-rich-text";
+import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
 import { loadCanvasDrawingPreview } from "@/lib/canvas/canvas-drawing-storage";
+import { buildLibTVImagePreviewUrl } from "@/lib/canvas/libtv-import";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import type { CanvasTheme } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
@@ -13,11 +15,22 @@ import { resourceIdFromStorageKey } from "@/services/api/resources";
 import type { GenerationTask } from "@/services/api/task-center";
 import { cacheResourceObjectUrl, getCachedResourceObjectUrl } from "@/services/resource-blob-cache";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
+import { getNodeDefinition } from "@/lib/canvas/node-registry";
+import { PORTRAIT_CLEARANCE_NODE_TYPE } from "@/lib/portrait-clearance/contracts";
 import { createDefaultSubtitleStyle } from "@/types/timeline";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
+import { useCanvasNodeActions } from "./canvas-node-action-context";
 import { CanvasSubtitleOverlay } from "./canvas-subtitle-overlay";
+import { MarkdownNodeContent } from "./nodes/markdown-node";
+import { ChartNodeContent } from "./nodes/chart-node";
+import { CompareNodeContent } from "./nodes/compare-node";
+import { ColorGradeNodeContent } from "./nodes/color-grade-node";
+import { HtmlNodeContent } from "./nodes/html-node";
+import { PanoramaNodeContent } from "./nodes/panorama-node";
+import { SvgNodeContent } from "./nodes/svg-node";
+import { PortraitClearanceNodeContent } from "./nodes/portrait-clearance-node";
 
-type CanvasNodeContentProps = {
+export type CanvasNodeContentProps = {
     node: CanvasNodeData;
     theme: CanvasTheme;
     isEditingContent: boolean;
@@ -33,7 +46,7 @@ type CanvasNodeContentProps = {
     onStopEditing: () => void;
     mentionReferences: CanvasResourceReference[];
     onRetry?: (node: CanvasNodeData) => void;
-    onCancelTask?: (node: CanvasNodeData) => void;
+    onReloadResource?: (node: CanvasNodeData) => void;
     onOpenTaskDetails?: (node: CanvasNodeData) => void;
     onToggleBatch?: () => void;
     reduceMediaEffects?: boolean;
@@ -47,15 +60,39 @@ export function CanvasNodeContent(props: CanvasNodeContentProps) {
         || (props.node.metadata?.workflowKind === "story_input" && !props.isEditingContent)
         || (props.node.metadata?.workflowKind === "styleboard" && !props.node.metadata.content);
     if (hasCustomContent && props.renderNodeContent) return props.renderNodeContent(props.node);
+    if (props.node.type === PORTRAIT_CLEARANCE_NODE_TYPE) return <PortraitClearanceNodeContent node={props.node} />;
     if (props.isBatchRoot) return <ImageNodeContent {...props} />;
-    if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} onCancelTask={props.onCancelTask} onOpenTaskDetails={props.onOpenTaskDetails} />;
-    if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
+    if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} onOpenTaskDetails={props.onOpenTaskDetails} />;
+    if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} onReloadResource={props.onReloadResource} />;
 
+    const pluginDefinition = getNodeDefinition(props.node.type)?.plugin;
+    if (pluginDefinition) return <PluginCanvasNodeContent {...props} renderer={pluginDefinition.renderer} schema={pluginDefinition.schema} />;
     const Renderer = nodeContentRenderers[props.node.type];
     return Renderer ? <Renderer {...props} /> : <UnknownNodeContent theme={props.theme} />;
 }
 
-const nodeContentRenderers = {
+function PluginCanvasNodeContent({ node, theme, renderer, schema }: CanvasNodeContentProps & { renderer: "declarative" | "sandbox"; schema: Record<string, unknown> }) {
+    if (renderer === "sandbox") {
+        return <div className="flex h-full w-full items-center justify-center p-4 text-center text-xs" style={{ color: theme.node.placeholder }}>
+            插件节点等待隔离运行时
+        </div>;
+    }
+    const data = node.metadata?.pluginData || {};
+    const fields = Object.keys(schema.properties && typeof schema.properties === "object" ? schema.properties as Record<string, unknown> : schema);
+    return <div className="flex h-full w-full flex-col gap-3 overflow-auto p-4 pt-10 text-xs" style={{ color: theme.node.text }}>
+        {fields.length ? fields.map((field) => <div key={field} className="flex flex-col gap-1">
+            <span className="font-medium opacity-60">{field}</span>
+            <span className="whitespace-pre-wrap break-words opacity-90">{formatPluginValue(data[field] ?? (field === "content" ? node.metadata?.content : undefined))}</span>
+        </div>) : <span className="whitespace-pre-wrap break-words">{node.metadata?.content || "插件节点"}</span>}
+    </div>;
+}
+
+function formatPluginValue(value: unknown) {
+    if (value === undefined || value === null || value === "") return "未设置";
+    return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+const nodeContentRenderers: Partial<Record<string, (props: CanvasNodeContentProps) => ReactNode>> = {
     [CanvasNodeType.Text]: TextContent,
     [CanvasNodeType.Script]: UnknownNodeContent,
     [CanvasNodeType.Skill]: SkillContent,
@@ -65,7 +102,14 @@ const nodeContentRenderers = {
     [CanvasNodeType.Audio]: AudioNodeContent,
     [CanvasNodeType.Drawing]: DrawingContent,
     [CanvasNodeType.Frame]: UnknownNodeContent,
-} satisfies Record<CanvasNodeType, (props: CanvasNodeContentProps) => ReactNode>;
+    [CanvasNodeType.Markdown]: MarkdownNodeContent,
+    [CanvasNodeType.Svg]: SvgNodeContent,
+    [CanvasNodeType.Html]: HtmlNodeContent,
+    [CanvasNodeType.Panorama]: PanoramaNodeContent,
+    [CanvasNodeType.Compare]: CompareNodeContent,
+    [CanvasNodeType.Chart]: ChartNodeContent,
+    [CanvasNodeType.ColorGrade]: ColorGradeNodeContent,
+};
 
 function DrawingContent({ node, theme, drawingProjectId }: CanvasNodeContentProps) {
     const shapeCount = node.metadata?.drawingShapeCount || 0;
@@ -99,10 +143,13 @@ function DrawingContent({ node, theme, drawingProjectId }: CanvasNodeContentProp
             {previewUrl ? (
                 <img src={previewUrl} alt="绘图预览" className="absolute inset-0 h-full w-full object-cover" draggable={false} />
             ) : (
-                <div className="absolute inset-0 grid place-items-center" style={{ backgroundImage: `radial-gradient(circle, ${theme.node.stroke} 1px, transparent 1px)`, backgroundSize: "18px 18px" }}>
-                    <span className="grid size-12 place-items-center rounded-[var(--r-md)]" style={{ background: theme.toolbar.panel, color: theme.node.muted }}>
-                        <Pencil className="size-5" />
-                    </span>
+                <div className="absolute inset-0 grid place-items-center" style={{ background: theme.node.panel, backgroundImage: `radial-gradient(circle, ${theme.node.stroke} 1px, transparent 1px)`, backgroundSize: "18px 18px" }}>
+                    <div className="flex flex-col items-center gap-2 rounded-[var(--r-lg)] px-4 py-3" style={{ border: `1px solid ${theme.node.edge}`, background: theme.node.fill, color: theme.node.muted }}>
+                        <span className="grid size-10 place-items-center rounded-[var(--r-md)]" style={{ background: theme.toolbar.panel, border: `1px solid ${theme.node.edge}`, color: theme.node.text }}>
+                            <Pencil className="size-5" />
+                        </span>
+                        <span className="text-[var(--fs-tiny)] font-medium">打开绘图</span>
+                    </div>
                 </div>
             )}
             <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-3 px-4 pb-3 pt-12" style={{ background: `linear-gradient(to top, ${theme.node.fill}, ${theme.node.fill}e6 55%, transparent)` }}>
@@ -116,7 +163,7 @@ function DrawingContent({ node, theme, drawingProjectId }: CanvasNodeContentProp
     );
 }
 
-function LoadingContent({ node, theme, onCancelTask, onOpenTaskDetails }: Pick<CanvasNodeContentProps, "node" | "theme" | "onCancelTask" | "onOpenTaskDetails">) {
+function LoadingContent({ node, theme, onOpenTaskDetails }: Pick<CanvasNodeContentProps, "node" | "theme" | "onOpenTaskDetails">) {
     const taskId = node.metadata?.taskId;
     const displayTask = {
         provider: node.metadata?.taskProvider,
@@ -151,9 +198,6 @@ function LoadingContent({ node, theme, onCancelTask, onOpenTaskDetails }: Pick<C
                     </div>
                     <div className="mt-0.5 flex items-center gap-1.5">
                         <button type="button" className="inline-flex h-7 items-center gap-1 rounded-[var(--r-sm)] px-2 text-[var(--fs-tiny)] font-medium transition-colors" style={{ background: theme.toolbar.itemHover, color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onOpenTaskDetails?.(node); }}><FileText className="size-3" />详情</button>
-                        {!submissionUncertain ? (
-                            <button type="button" className="inline-flex h-7 items-center gap-1 rounded-[var(--r-sm)] px-2 text-[var(--fs-tiny)] font-medium transition-colors" style={{ background: `${theme.accent.danger}16`, color: theme.accent.danger }} onMouseDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onCancelTask?.(node); }}><Square className="size-2.5 fill-current" />取消</button>
-                        ) : null}
                     </div>
                 </div>
             ) : null}
@@ -180,7 +224,7 @@ function shortTaskId(id: string) {
     return `${id.slice(0, 14)}...${id.slice(-4)}`;
 }
 
-function ErrorContent({ node, theme, onRetry }: Pick<CanvasNodeContentProps, "node" | "theme" | "onRetry">) {
+function ErrorContent({ node, theme, onRetry, onReloadResource }: Pick<CanvasNodeContentProps, "node" | "theme" | "onRetry" | "onReloadResource">) {
     const moderationFailure = node.metadata?.generationErrorCode === CONTENT_MODERATION_ERROR_CODE || isContentModerationError(node.metadata?.errorDetails);
     const errorDisplayTask = {
         provider: node.metadata?.taskProvider,
@@ -201,6 +245,29 @@ function ErrorContent({ node, theme, onRetry }: Pick<CanvasNodeContentProps, "no
                 <div className="rounded-[var(--r-sm)] px-3 py-2 text-[var(--fs-label)] leading-4" style={{ background: theme.toolbar.itemHover, color: theme.node.muted }}>
                     修改节点提示词后，可重新点击生成。
                 </div>
+            ) : node.metadata?.resourceReloadAvailable ? (
+                <div className="flex flex-wrap justify-center gap-2">
+                    <button
+                        type="button"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-[var(--r-md)] px-3 text-xs font-medium transition-colors"
+                        style={{ background: theme.accent.primary, color: theme.accent.onPrimary }}
+                        onClick={(event) => { event.stopPropagation(); onReloadResource?.(node); }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <Download className="size-3.5" />
+                        重新加载资源
+                    </button>
+                    <button
+                        type="button"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-[var(--r-md)] px-3 text-xs font-medium transition-colors"
+                        style={{ background: theme.toolbar.itemHover, color: theme.node.text }}
+                        onClick={(event) => { event.stopPropagation(); onRetry?.(node); }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <RefreshCw className="size-3.5" />
+                        重新生成
+                    </button>
+                </div>
             ) : (
                 <button
                     type="button"
@@ -213,7 +280,7 @@ function ErrorContent({ node, theme, onRetry }: Pick<CanvasNodeContentProps, "no
                     onMouseDown={(event) => event.stopPropagation()}
                 >
                     <RefreshCw className="size-3.5" />
-                    {node.metadata?.isBatchRoot ? "重试失败项" : "重试"}
+                    {node.metadata?.isBatchRoot ? "重新生成失败项" : "重新生成"}
                 </button>
             )}
         </div>
@@ -250,13 +317,14 @@ function TextContent({ node, theme, isEditingContent, textareaRef, mentionRefere
                 />
             ) : richTextHTML ? (
                 <div
-                    className="thin-scrollbar block h-full w-full overflow-y-auto break-words bg-transparent px-4 pb-4 font-mono [&_a]:underline [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:opacity-70 [&_code]:rounded [&_code]:bg-black/6 [&_code]:px-1 dark:[&_code]:bg-white/8 [&_h1]:my-2 [&_h1]:text-[1.55em] [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-[1.3em] [&_h2]:font-semibold [&_h3]:my-1.5 [&_h3]:text-[1.12em] [&_h3]:font-semibold [&_hr]:my-3 [&_li]:my-0.5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-black/90 [&_pre]:p-2 [&_pre]:text-white [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
+                    className="thin-scrollbar block h-full w-full select-text overflow-y-auto break-words bg-transparent px-4 pb-4 font-mono [&_a]:underline [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:opacity-70 [&_code]:rounded [&_code]:bg-black/6 [&_code]:px-1 dark:[&_code]:bg-white/8 [&_h1]:my-2 [&_h1]:text-[1.55em] [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-[1.3em] [&_h2]:font-semibold [&_h3]:my-1.5 [&_h3]:text-[1.12em] [&_h3]:font-semibold [&_hr]:my-3 [&_li]:my-0.5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-black/90 [&_pre]:p-2 [&_pre]:text-white [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
                     style={textStyle}
+                    onMouseDown={(event) => event.stopPropagation()}
                     onWheel={(event) => event.stopPropagation()}
                     dangerouslySetInnerHTML={{ __html: richTextHTML }}
                 />
             ) : (
-                <div className="thin-scrollbar block h-full w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-4 pb-4 pt-0 font-mono" style={textStyle} onWheel={(event) => event.stopPropagation()}>
+                <div className="thin-scrollbar block h-full w-full select-text overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-4 pb-4 pt-0 font-mono" style={textStyle} onMouseDown={(event) => event.stopPropagation()} onWheel={(event) => event.stopPropagation()}>
                     {node.metadata?.content || <span style={{ color: theme.node.placeholder }}>双击编辑文字</span>}
                 </div>
             )}
@@ -319,7 +387,7 @@ function ImageNodeContent(props: CanvasNodeContentProps) {
         const content = props.node.metadata?.status === "loading"
             ? <LoadingContent node={props.node} theme={props.theme} />
             : props.node.metadata?.status === "error"
-                ? <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />
+                ? <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} onReloadResource={props.onReloadResource} />
                 : <EmptyImageContent {...props} isBatchRoot={false} />;
         return <BatchFrame batchCount={props.batchCount} batchExpanded={props.batchExpanded} batchOpening={props.batchOpening} batchRecovering={props.batchRecovering} theme={props.theme} onToggleBatch={props.onToggleBatch}>{content}</BatchFrame>;
     }
@@ -347,6 +415,7 @@ function EmptyImageContent({ node, theme, isBatchRoot, batchCount, batchExpanded
 function VideoNodeContent({ node, theme, reduceMediaEffects }: CanvasNodeContentProps) {
     const playWhenReadyRef = useRef(false);
     const playerBoxRef = useRef<HTMLDivElement>(null);
+    const { updateMetadata } = useCanvasNodeActions();
     const { url, loading, load } = useNodeResourceUrl(node, false);
     const subtitleEntries = node.metadata?.subtitleEntries || [];
     const subtitleStyle = node.metadata?.subtitleStyle || createDefaultSubtitleStyle();
@@ -358,7 +427,11 @@ function VideoNodeContent({ node, theme, reduceMediaEffects }: CanvasNodeContent
         const video = box?.querySelector("video");
         if (!video) return;
         const handleLoadedMetadata = () => {
-            if (video.videoWidth > 0 && video.videoHeight > 0) setVideoSize({ width: video.videoWidth, height: video.videoHeight });
+            if (video.videoWidth <= 0 || video.videoHeight <= 0) return;
+            setVideoSize({ width: video.videoWidth, height: video.videoHeight });
+            if (node.metadata?.naturalWidth !== video.videoWidth || node.metadata?.naturalHeight !== video.videoHeight) {
+                updateMetadata?.(node.id, { naturalWidth: video.videoWidth, naturalHeight: video.videoHeight });
+            }
         };
         video.addEventListener("loadedmetadata", handleLoadedMetadata);
         handleLoadedMetadata();
@@ -369,7 +442,7 @@ function VideoNodeContent({ node, theme, reduceMediaEffects }: CanvasNodeContent
             video.removeEventListener("timeupdate", handleTimeUpdate);
             video.removeEventListener("loadedmetadata", handleLoadedMetadata);
         };
-    }, [subtitleEntries.length, url]);
+    }, [node.id, node.metadata?.naturalHeight, node.metadata?.naturalWidth, subtitleEntries.length, updateMetadata, url]);
 
     if (!node.metadata?.content) return <EmptyMediaContent icon={<Video className="size-7 opacity-35" />} label="空视频节点" color={theme.node.placeholder} />;
     if (!url) return <DeferredMediaLoad icon={loading ? <LoaderCircle className="size-5 animate-spin" /> : <Play className="size-5 fill-current" />} label={loading ? "正在缓存视频" : "加载并缓存视频"} disabled={loading} onClick={() => { playWhenReadyRef.current = true; void load(); }} />;
@@ -417,10 +490,37 @@ function ImageContent({ node, theme, isBatchRoot, batchCount, batchExpanded, bat
     const imageContainerRef = useRef<HTMLDivElement>(null);
     const nearViewport = useNearViewport(imageContainerRef);
     const { url, loading } = useNodeResourceUrl(node, nearViewport);
+    const importedFromLibTV = node.metadata?.importSource?.provider === "libtv";
+    const { resizeNode, updateMetadata } = useCanvasNodeActions();
+
+    /**
+     * 让节点跟随图片真实比例。
+     *
+     * 上传接口的 width/height 是可选的（services/api/resources.ts），拿不到时节点会落到
+     * 默认的横向比例，竖图就被放进一个宽盒子、两侧留黑。这里在图片解码后量真实尺寸并校正。
+     *
+     * 判据是「用户有没有手动定过尺寸」，**不是**「有没有量过尺寸」——后者会让所有已经
+     * 存过 naturalWidth 的旧节点永远得不到修正（第一版就是这么写的，所以没生效）。
+     * 手动拉过（manualSize）或自由比例（freeResize）的节点只补记尺寸、不动宽高。
+     */
+    const fitToImage = (element: HTMLImageElement) => {
+        const naturalWidth = element.naturalWidth;
+        const naturalHeight = element.naturalHeight;
+        if (!naturalWidth || !naturalHeight) return;
+        if (node.metadata?.naturalWidth !== naturalWidth || node.metadata?.naturalHeight !== naturalHeight) {
+            updateMetadata?.(node.id, { naturalWidth, naturalHeight });
+        }
+        if (node.metadata?.freeResize || node.metadata?.manualSize) return;
+        const size = fitNodeSize(naturalWidth, naturalHeight);
+        // 差不到 1px 就别动，避免无意义的状态写入。
+        if (Math.abs(size.width - node.width) < 1 && Math.abs(size.height - node.height) < 1) return;
+        resizeNode?.(node.id, size);
+    };
+
     return (
         <BatchFrame batchCount={isBatchRoot ? batchCount : 0} batchExpanded={batchExpanded} batchOpening={batchOpening} batchRecovering={batchRecovering} theme={theme} onToggleBatch={onToggleBatch}>
             <div ref={imageContainerRef} className="h-full w-full overflow-hidden rounded-[var(--node-radius)]">
-                {url ? <img src={url} alt={node.title} loading="lazy" decoding="async" draggable={false} onDragStart={(event) => event.preventDefault()} className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`} /> : <div className="grid size-full place-items-center" style={{ color: theme.node.muted }}>{loading ? <LoaderCircle className="size-5 animate-spin" /> : <ImageIcon className="size-5 opacity-45" />}</div>}
+                {url ? <img src={url} alt={node.title} loading={importedFromLibTV ? "eager" : "lazy"} decoding="async" draggable={false} onDragStart={(event) => event.preventDefault()} onLoad={(event) => fitToImage(event.currentTarget)} className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`} /> : <div className="grid size-full place-items-center" style={{ color: theme.node.muted }}>{loading ? <LoaderCircle className="size-5 animate-spin" /> : <ImageIcon className="size-5 opacity-45" />}</div>}
             </div>
         </BatchFrame>
     );
@@ -432,7 +532,9 @@ function DeferredMediaLoad({ icon, label, disabled, onClick }: { icon: ReactNode
 
 function useNodeResourceUrl(node: CanvasNodeData, eager: boolean) {
     const storageKey = node.metadata?.storageKey || "";
-    const fallback = node.metadata?.content || "";
+    const content = node.metadata?.content || "";
+    const fallback = node.metadata?.previewContent
+        || (node.type === CanvasNodeType.Image && node.metadata?.importSource?.provider === "libtv" ? buildLibTVImagePreviewUrl(content) : content);
     const isRemoteResource = Boolean(resourceIdFromStorageKey(storageKey));
     const [url, setUrl] = useState(isRemoteResource ? "" : fallback);
     const [loading, setLoading] = useState(isRemoteResource && eager);

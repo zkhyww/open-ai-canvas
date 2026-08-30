@@ -1,14 +1,18 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { AlertCircle, BookOpenCheck, CheckCircle2, ChevronRight, Clapperboard, Image as ImageIcon, Lock, Maximize2, Music2, Pencil, Plus, Replace, Settings2, Star, Type, Upload, Video } from "lucide-react";
+import { AlertCircle, BookOpenCheck, CheckCircle2, ChevronRight, Clapperboard, Copy, Download, Image as ImageIcon, Lock, Maximize2, Music2, Pencil, Plus, RefreshCw, Settings2, Star, Trash2, Type, Video } from "lucide-react";
+
+import { useCanvasNodeActions } from "./canvas-node-action-context";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { storyboardMinNodeHeight } from "@/lib/canvas/canvas-storyboard-layout";
 import { resourceStorageLabel, resourceStorageLocation, resourceStorageTitle } from "@/lib/canvas/resource-storage-status";
 import { useThemeStore } from "@/stores/use-theme-store";
-import { storyboardMinNodeHeight } from "./canvas-script-node";
-import { CanvasNodeType, type CanvasNodeData, type Position } from "@/types/canvas";
+import { CanvasNodeType, type CanvasNodeData, type CanvasNodeTypeId, type Position } from "@/types/canvas";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
-import { MEDIA_NODE_MIN_SIZE } from "@/lib/canvas/canvas-node-size";
+import { PortraitClearanceIcon } from "@/components/canvas/portrait-clearance/portrait-clearance-icon";
+import { PORTRAIT_CLEARANCE_NODE_TYPE } from "@/lib/portrait-clearance/contracts";
+import { getNodeDefinition, getNodeMinSize, shouldKeepAspectRatio } from "@/lib/canvas/node-registry";
 import { CanvasNodeContent, CanvasNodeImageInfo } from "./canvas-node-content";
 
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -22,7 +26,6 @@ type CanvasNodeProps = {
     isRelated: boolean;
     isFocusRelated: boolean;
     isConnectionTarget: boolean;
-    isConnecting: boolean;
     forceInputVisible?: boolean;
     showImageInfo: boolean;
     reduceMediaEffects?: boolean;
@@ -48,7 +51,7 @@ type CanvasNodeProps = {
     onToggleBatch?: (nodeId: string) => void;
     onSetBatchPrimary?: (node: CanvasNodeData) => void;
     onRetry?: (node: CanvasNodeData) => void;
-    onCancelTask?: (node: CanvasNodeData) => void;
+    onReloadResource?: (node: CanvasNodeData) => void;
     onOpenTaskDetails?: (node: CanvasNodeData) => void;
     onOpenVersions?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
@@ -92,11 +95,10 @@ export const CanvasNode = React.memo(function CanvasNode({
     onToggleBatch,
     onSetBatchPrimary,
     onRetry,
-    onCancelTask,
+    onReloadResource,
     onOpenTaskDetails,
     onOpenVersions,
     onViewImage,
-    onReplaceMedia,
     onOpenTextEditor,
     onOpenDirector,
     onOpenDrawing,
@@ -107,16 +109,19 @@ export const CanvasNode = React.memo(function CanvasNode({
     const [isEditingContent, setIsEditingContent] = useState(false);
     const [isEditingTitle, setIsEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState(data.title);
+    const { download: downloadNode, duplicate: duplicateNode, deleteNode } = useCanvasNodeActions();
     const hasImageContent = data.type === CanvasNodeType.Image && Boolean(data.metadata?.content);
     const hasVideoContent = data.type === CanvasNodeType.Video && Boolean(data.metadata?.content);
     const hasAudioContent = data.type === CanvasNodeType.Audio && Boolean(data.metadata?.content);
+    const mediaDimensionLabel = formatMediaDimensionLabel(data, hasImageContent || hasVideoContent);
+    const isComposerNode = data.type === CanvasNodeType.Config;
     const hasMediaContent = hasImageContent || hasVideoContent || hasAudioContent;
-    const hasReplaceAction = !readOnly && (data.type === CanvasNodeType.Image || data.type === CanvasNodeType.Video);
     const isBatchRoot = data.type === CanvasNodeType.Image && Boolean(data.metadata?.isBatchRoot) && batchCount > 1;
     const isBatchChild = data.type === CanvasNodeType.Image && Boolean(data.metadata?.batchRootId);
     const showStatusTrack = Boolean(resourceLabel || data.metadata?.locked || isBatchRoot || (isBatchChild && !readOnly) || (hasMediaContent && !readOnly));
     const isActive = isConnectionTarget || isSelected || isFocusRelated;
     const nodeState = isFocusRelated ? "focus" : isConnectionTarget ? "target" : isSelected ? "selected" : isRelated && !isBatchChild ? "related" : "idle";
+    const showOutputConnection = data.type !== PORTRAIT_CLEARANCE_NODE_TYPE && getNodeDefinition(data.type)?.showOutputConnection !== false;
     const assetTags = data.metadata?.assetTags?.filter((tag) => tag.trim()) || [];
     const scriptMinHeight = data.type === CanvasNodeType.Script ? storyboardMinNodeHeight(data.metadata?.storyboardComposerHeight) : null;
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -174,9 +179,10 @@ export const CanvasNode = React.memo(function CanvasNode({
 
             const dx = (event.clientX - resizeRef.current.startX) / scale;
             const dy = (event.clientY - resizeRef.current.startY) / scale;
-            const isMediaNode = data.type === CanvasNodeType.Image || data.type === CanvasNodeType.Video;
-            const minWidth = data.type === CanvasNodeType.Script ? 800 : isMediaNode ? MEDIA_NODE_MIN_SIZE.width : 220;
-            const minHeight = scriptMinHeight || (isMediaNode ? MEDIA_NODE_MIN_SIZE.height : 160);
+            const minSize = getNodeMinSize(data.type);
+            const minWidth = minSize.width;
+            // 分镜脚本的高度由表格内容动态撑开，覆盖注册表里的静态下限。
+            const minHeight = scriptMinHeight || minSize.height;
             const startRight = resizeRef.current.startLeft + resizeRef.current.startWidth;
             const startBottom = resizeRef.current.startTop + resizeRef.current.startHeight;
             const fromLeft = resizeRef.current.corner.includes("left");
@@ -228,7 +234,7 @@ export const CanvasNode = React.memo(function CanvasNode({
             startTop: data.position.y,
             startWidth: data.width,
             startHeight: data.height,
-            keepRatio: (data.type === CanvasNodeType.Image && !data.metadata?.freeResize) || data.type === CanvasNodeType.Video,
+            keepRatio: shouldKeepAspectRatio(data),
             ratio: (data.metadata?.naturalWidth || data.width) / (data.metadata?.naturalHeight || data.height || 1),
         };
         window.addEventListener("mousemove", handleResizeMove);
@@ -275,6 +281,7 @@ export const CanvasNode = React.memo(function CanvasNode({
             <NodeExternalHeader
                 node={data}
                 scale={scale}
+                dimensionLabel={mediaDimensionLabel}
                 active={hovered || isSelected || isFocusRelated}
                 editable={!readOnly && !data.metadata?.locked && Boolean(onTitleChange)}
                 editing={isEditingTitle}
@@ -290,7 +297,10 @@ export const CanvasNode = React.memo(function CanvasNode({
                 data-node-state={nodeState}
                 data-state={data.metadata?.status || (isActive ? "active" : isRelated ? "related" : "idle")}
                 style={{
-                    background: hasImageContent || hasVideoContent ? "transparent" : "var(--card-surface)",
+                    background: hasImageContent || hasVideoContent ? "transparent" : theme.node.fill,
+                    // 固定占位但不绘制描边，避免聚焦切换时边框宽度变化造成白边跳动。
+                    border: isComposerNode ? "0" : "1px solid transparent",
+                    boxShadow: isComposerNode ? "none" : isSelected || hovered ? theme.node.hoverShadow : theme.node.shadow,
                 }}
                 onMouseDown={(event) => onMouseDown(event, data.id)}
                 onDoubleClick={(event) => {
@@ -328,7 +338,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                     className={`relative flex h-full w-full items-center justify-center rounded-[inherit] ${isBatchRoot || data.type === CanvasNodeType.Script ? "overflow-visible" : "overflow-hidden"}`}
                     style={
                         {
-                            background: hasImageContent || hasVideoContent ? "transparent" : "var(--card-surface)",
+                            background: hasImageContent || hasVideoContent ? "transparent" : theme.node.fill,
                             "--batch-from-x": `${batchMotion?.x || 0}px`,
                             "--batch-from-y": `${batchMotion?.y || 0}px`,
                             "--batch-from-rotate": `${6 + (batchMotion?.index || 0) * 4}deg`,
@@ -357,31 +367,12 @@ export const CanvasNode = React.memo(function CanvasNode({
                         onContentChange={onContentChange}
                         onStopEditing={() => setIsEditingContent(false)}
                         onRetry={onRetry}
-                        onCancelTask={onCancelTask}
+                        onReloadResource={onReloadResource}
                         onOpenTaskDetails={onOpenTaskDetails}
                         onToggleBatch={() => onToggleBatch?.(data.id)}
                         reduceMediaEffects={reduceMediaEffects}
                     />
                 </div>
-
-                {hasReplaceAction ? (
-                    <div
-                        className={`absolute right-3 top-3 z-[var(--node-z-overlay)] motion-safe:transition motion-safe:duration-200 ${!hasMediaContent || isSelected || hovered ? "opacity-100" : "pointer-events-none opacity-0"}`}
-                        onMouseDown={(event) => event.stopPropagation()}
-                        onPointerDown={(event) => event.stopPropagation()}
-                    >
-                        <button
-                            type="button"
-                            className="canvas-node-inline-action grid size-9 place-items-center p-0 backdrop-blur-xl transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
-                            style={{ outlineColor: theme.accent.primary }}
-                            onClick={(event) => { event.stopPropagation(); onReplaceMedia?.(data); }}
-                            aria-label={hasMediaContent ? "替换媒体" : data.type === CanvasNodeType.Image ? "上传图片" : "上传视频"}
-                            title={hasMediaContent ? "替换媒体" : data.type === CanvasNodeType.Image ? "上传图片" : "上传视频"}
-                        >
-                            {hasMediaContent ? <Replace className="size-3.5" /> : <Upload className="size-3.5" />}
-                        </button>
-                    </div>
-                ) : null}
 
                 {data.type === CanvasNodeType.Text && data.metadata?.workflowKind !== "character" && !readOnly ? (
                     <div
@@ -421,12 +412,37 @@ export const CanvasNode = React.memo(function CanvasNode({
                     </button>
                 ) : null}
                 {showStatusTrack ? (
-                    <div className={`absolute top-3 z-[var(--node-z-overlay)] flex min-w-0 items-center justify-end gap-1 ${hasReplaceAction ? "right-14" : "right-3"} ${data.metadata?.versionLabel ? "max-w-[calc(100%-104px)]" : "max-w-[calc(100%-24px)]"}`}>
+                    <div className={`absolute right-3 top-3 z-[var(--node-z-overlay)] flex min-w-0 items-center justify-end gap-1 ${data.metadata?.versionLabel ? "max-w-[calc(100%-104px)]" : "max-w-[calc(100%-24px)]"}`}>
                         {resourceLabel && data.type !== CanvasNodeType.Image ? <ResourceLabelBadge reference={resourceLabel} theme={theme} /> : null}
                         {hasMediaContent && !readOnly ? <ResourceStorageBadge storageKey={data.metadata?.storageKey} active={isActive} theme={theme} /> : null}
                         {isBatchRoot ? <BatchToggleBadge count={batchCount} expanded={batchExpanded} theme={theme} onToggle={() => onToggleBatch?.(data.id)} /> : null}
                         {isBatchChild && !readOnly ? <BatchPrimaryBadge visible={batchPrimary || hovered || isSelected} selected={batchPrimary} theme={theme} onSelect={() => onSetBatchPrimary?.(data)} /> : null}
                         {data.metadata?.locked ? <NodeLockBadge theme={theme} /> : null}
+                    </div>
+                ) : null}
+                {/* 批次子图操作条：成功子项提供下载/副本/设为主图，失败子项提供重试/删除 */}
+                {isBatchChild && !readOnly && (hasImageContent || data.metadata?.status === "error") && (hovered || isSelected) ? (
+                    <div
+                        className="absolute inset-x-0 bottom-2 z-[var(--node-z-overlay)] flex justify-center"
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onPointerDown={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-center gap-0.5 rounded-[var(--r-md)] border px-1 py-1 backdrop-blur-xl" style={{ background: `${theme.toolbar.panel}e6`, borderColor: theme.toolbar.border }}>
+                            {hasImageContent ? <BatchChildActionButton theme={theme} label="下载图片" icon={<Download className="size-3.5" />} onClick={() => downloadNode?.(data)} /> : null}
+                            {hasImageContent ? <BatchChildActionButton theme={theme} label="创建副本" icon={<Copy className="size-3.5" />} onClick={() => duplicateNode?.(data)} /> : null}
+                            {hasImageContent ? (
+                                <BatchChildActionButton theme={theme} label={batchPrimary ? "当前主图" : "设为主图"} icon={<Star className={`size-3.5 ${batchPrimary ? "fill-current" : ""}`} style={{ color: theme.accent.primary }} />} onClick={() => onSetBatchPrimary?.(data)} />
+                            ) : null}
+                            {data.metadata?.status === "error" && data.metadata.resourceReloadAvailable ? <BatchChildActionButton theme={theme} label="重新加载资源" icon={<Download className="size-3.5" />} onClick={() => onReloadResource?.(data)} /> : null}
+                            {data.metadata?.status === "error" ? <BatchChildActionButton theme={theme} label="重新生成" icon={<RefreshCw className="size-3.5" />} onClick={() => onRetry?.(data)} /> : null}
+                            {data.metadata?.status === "error" ? <BatchChildActionButton theme={theme} label="删除" icon={<Trash2 className="size-3.5" />} danger onClick={() => deleteNode?.(data)} /> : null}
+                        </div>
+                    </div>
+                ) : null}
+                {/* 批次主图位（折叠根节点封面）常驻下载按钮 */}
+                {isBatchRoot && hasImageContent && !readOnly ? (
+                    <div className="absolute bottom-2 right-2 z-[var(--node-z-overlay)]" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+                        <BatchChildActionButton theme={theme} label="下载主图" icon={<Download className="size-3.5" />} onClick={() => downloadNode?.(data)} />
                     </div>
                 ) : null}
                 {assetTags.length || (showImageInfo && hasImageContent) ? (
@@ -436,7 +452,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                     </div>
                 ) : null}
 
-                {!readOnly && !data.metadata?.locked ? <>
+                {!readOnly && !data.metadata?.locked && (isSelected || hovered) ? <>
                     <ResizeHandle corner="top-left" onMouseDown={handleResizeMouseDown} />
                     <ResizeHandle corner="top-right" onMouseDown={handleResizeMouseDown} />
                     <ResizeHandle corner="bottom-left" onMouseDown={handleResizeMouseDown} />
@@ -444,12 +460,61 @@ export const CanvasNode = React.memo(function CanvasNode({
                 </> : null}
             </div>
 
-            {!readOnly && data.type !== CanvasNodeType.Script ? <ConnectionSideRail side="left" scale={scale} visible={hovered || forceInputVisible} theme={theme} onPointerDown={(event, anchorRatio) => onConnectStart(event, data.id, "target", undefined, anchorRatio)} /> : null}
-            {!readOnly && data.type !== CanvasNodeType.Script && data.type !== CanvasNodeType.Config ? <ConnectionSideRail side="right" scale={scale} visible={hovered} theme={theme} onPointerDown={(event, anchorRatio) => onConnectStart(event, data.id, "source", undefined, anchorRatio)} /> : null}
+            {!readOnly && data.type !== CanvasNodeType.Script && (hovered || forceInputVisible) ? <ConnectionSideRail side="left" scale={scale} theme={theme} onPointerDown={(event, anchorRatio) => onConnectStart(event, data.id, "target", undefined, anchorRatio)} /> : null}
+            {!readOnly && data.type !== CanvasNodeType.Script && data.type !== CanvasNodeType.Config && showOutputConnection && hovered ? <ConnectionSideRail side="right" scale={scale} theme={theme} onPointerDown={(event, anchorRatio) => onConnectStart(event, data.id, "source", undefined, anchorRatio)} /> : null}
 
         </div>
     );
-});
+}, areCanvasNodePropsEqual);
+
+function areCanvasNodePropsEqual(previous: CanvasNodeProps, next: CanvasNodeProps) {
+    return (
+        previous.data === next.data &&
+        previous.dragOffset?.x === next.dragOffset?.x &&
+        previous.dragOffset?.y === next.dragOffset?.y &&
+        previous.scale === next.scale &&
+        previous.isSelected === next.isSelected &&
+        previous.isRelated === next.isRelated &&
+        previous.isFocusRelated === next.isFocusRelated &&
+        previous.isConnectionTarget === next.isConnectionTarget &&
+        previous.forceInputVisible === next.forceInputVisible &&
+        previous.showImageInfo === next.showImageInfo &&
+        previous.reduceMediaEffects === next.reduceMediaEffects &&
+        previous.readOnly === next.readOnly &&
+        previous.resourceLabel === next.resourceLabel &&
+        previous.mentionReferences === next.mentionReferences &&
+        previous.renderNodeContent === next.renderNodeContent &&
+        previous.drawingProjectId === next.drawingProjectId &&
+        previous.batchCount === next.batchCount &&
+        previous.batchExpanded === next.batchExpanded &&
+        previous.batchClosing === next.batchClosing &&
+        previous.batchOpening === next.batchOpening &&
+        previous.batchRecovering === next.batchRecovering &&
+        previous.batchPrimary === next.batchPrimary &&
+        previous.batchMotion?.x === next.batchMotion?.x &&
+        previous.batchMotion?.y === next.batchMotion?.y &&
+        previous.batchMotion?.index === next.batchMotion?.index &&
+        previous.onMouseDown === next.onMouseDown &&
+        previous.onHoverStart === next.onHoverStart &&
+        previous.onHoverEnd === next.onHoverEnd &&
+        previous.onConnectStart === next.onConnectStart &&
+        previous.onResize === next.onResize &&
+        previous.onTitleChange === next.onTitleChange &&
+        previous.onContentChange === next.onContentChange &&
+        previous.onToggleBatch === next.onToggleBatch &&
+        previous.onSetBatchPrimary === next.onSetBatchPrimary &&
+        previous.onRetry === next.onRetry &&
+        previous.onReloadResource === next.onReloadResource &&
+        previous.onOpenTaskDetails === next.onOpenTaskDetails &&
+        previous.onOpenVersions === next.onOpenVersions &&
+        previous.onViewImage === next.onViewImage &&
+        previous.onReplaceMedia === next.onReplaceMedia &&
+        previous.onOpenTextEditor === next.onOpenTextEditor &&
+        previous.onOpenDirector === next.onOpenDirector &&
+        previous.onOpenDrawing === next.onOpenDrawing &&
+        previous.onContextMenu === next.onContextMenu
+    );
+}
 
 function ResourceLabelBadge({ reference, theme }: { reference: CanvasResourceReference; theme: CanvasTheme }) {
     return (
@@ -491,6 +556,24 @@ function BatchPrimaryBadge({ visible, selected, theme, onSelect }: { visible: bo
     );
 }
 
+function BatchChildActionButton({ theme, label, icon, onClick, danger = false }: { theme: CanvasTheme; label: string; icon: ReactNode; onClick: () => void; danger?: boolean }) {
+    return (
+        <button
+            type="button"
+            data-canvas-no-zoom
+            className="canvas-node-inline-action grid size-8 place-items-center rounded-[var(--r-sm)] p-0 backdrop-blur-xl transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+            style={{ color: danger ? theme.accent.danger : theme.node.text, outlineColor: theme.accent.primary }}
+            title={label}
+            aria-label={label}
+            onClick={(event) => { event.stopPropagation(); onClick(); }}
+            onMouseDown={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+        >
+            {icon}
+        </button>
+    );
+}
+
 function AssetTagBadges({ tags, theme }: { tags: string[]; theme: (typeof canvasThemes)[keyof typeof canvasThemes] }) {
     return (
         <div className="flex min-w-0 flex-1 flex-wrap items-end gap-1">
@@ -520,9 +603,17 @@ function ResizeHandle({ corner, onMouseDown }: { corner: ResizeCorner; onMouseDo
 
 const NODE_EXTERNAL_HEADER_MIN_SCALE = 0.35;
 
-function NodeExternalHeader({ node, scale, active, editable, editing, draft, theme, onDraftChange, onEdit, onCommit, onCancel }: {
+function formatMediaDimensionLabel(node: CanvasNodeData, hasVisualMediaContent: boolean) {
+    const width = node.metadata?.naturalWidth;
+    const height = node.metadata?.naturalHeight;
+    if (!hasVisualMediaContent || !Number.isFinite(width) || !Number.isFinite(height) || !width || !height || width <= 0 || height <= 0) return null;
+    return `${Math.round(width)}*${Math.round(height)}`;
+}
+
+function NodeExternalHeader({ node, scale, dimensionLabel, active, editable, editing, draft, theme, onDraftChange, onEdit, onCommit, onCancel }: {
     node: CanvasNodeData;
     scale: number;
+    dimensionLabel: string | null;
     active: boolean;
     editable: boolean;
     editing: boolean;
@@ -538,43 +629,56 @@ function NodeExternalHeader({ node, scale, active, editable, editing, draft, the
     const inverseScale = 1 / Math.max(scale, 0.05);
     const Icon = nodeTypeIcon(node.type);
     const maxHeaderWidth = Math.min(240, node.width * scale);
+    const externalHeaderWidth = node.width * scale;
 
     return (
         <div
             className="canvas-node-external-header absolute bottom-full left-0 z-[var(--node-z-overlay)] flex h-6 items-center gap-1 overflow-hidden"
-            style={{ maxWidth: maxHeaderWidth, color: active ? theme.node.text : theme.node.label, transform: `scale(var(--canvas-live-inverse-scale, ${inverseScale}))`, transformOrigin: "left bottom" }}
+            style={{
+                width: dimensionLabel ? externalHeaderWidth : undefined,
+                maxWidth: dimensionLabel ? undefined : maxHeaderWidth,
+                borderRadius: "var(--r-sm)",
+                background: "transparent",
+                paddingInline: "var(--space-1-half)",
+                color: active ? theme.node.text : theme.node.label,
+                transform: `scale(var(--canvas-live-inverse-scale, ${inverseScale}))`,
+                transformOrigin: "left bottom",
+            }}
             onMouseDown={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
         >
-            <Icon className="size-3 shrink-0" strokeWidth={1.8} />
-            {editing ? (
-                <input
-                    autoFocus
-                    value={draft}
-                    className="h-6 min-w-20 max-w-[190px] flex-1 truncate rounded border bg-transparent px-1.5 text-xs font-medium outline-none"
-                    style={{ background: theme.spatial.elevated, borderColor: theme.toolbar.border, color: theme.node.text, boxShadow: "var(--elevation-card)" }}
-                    onChange={(event) => onDraftChange(event.target.value)}
-                    onFocus={(event) => event.currentTarget.select()}
-                    onBlur={onCommit}
-                    onKeyDown={(event) => {
-                        if (event.key === "Enter") event.currentTarget.blur();
-                        if (event.key === "Escape") onCancel();
-                    }}
-                    aria-label="节点名称"
-                />
-            ) : editable ? (
-                <button type="button" className="group flex min-w-0 flex-1 items-center gap-1 rounded px-0.5 text-xs font-medium outline-none transition-opacity hover:opacity-100 focus-visible:ring-1" style={{ opacity: active ? 1 : 0.78, "--tw-ring-color": theme.node.activeStroke } as React.CSSProperties} onClick={onEdit} aria-label={`编辑节点名称：${node.title}`}>
-                    <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
-                    <Pencil className="size-2.5 shrink-0 opacity-55 transition-opacity group-hover:opacity-100" />
-                </button>
-            ) : (
-                <span className="min-w-0 flex-1 truncate text-xs font-medium" title={node.title} style={{ opacity: active ? 1 : 0.78 }}>{node.title}</span>
-            )}
+            <div className="flex min-w-0 items-center gap-1" style={{ maxWidth: maxHeaderWidth }}>
+                <Icon className="size-3 shrink-0" strokeWidth={1.8} />
+                {editing ? (
+                    <input
+                        autoFocus
+                        value={draft}
+                        className="h-6 min-w-20 max-w-[190px] flex-1 truncate rounded bg-transparent px-1.5 text-xs font-medium outline-none"
+                        style={{ background: "transparent", color: theme.node.text }}
+                        onChange={(event) => onDraftChange(event.target.value)}
+                        onFocus={(event) => event.currentTarget.select()}
+                        onBlur={onCommit}
+                        onKeyDown={(event) => {
+                            if (event.key === "Enter") event.currentTarget.blur();
+                            if (event.key === "Escape") onCancel();
+                        }}
+                        aria-label="节点名称"
+                    />
+                ) : editable ? (
+                    <button type="button" className="group flex min-w-0 flex-1 items-center gap-1 rounded px-0.5 text-xs font-medium outline-none transition-opacity hover:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1" style={{ opacity: active ? 1 : 0.78, outlineColor: theme.node.muted }} onClick={onEdit} aria-label={`编辑节点名称：${node.title}`}>
+                        <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
+                        <Pencil className="size-2.5 shrink-0 opacity-55 transition-opacity group-hover:opacity-100" />
+                    </button>
+                ) : (
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium" title={node.title} style={{ opacity: active ? 1 : 0.78 }}>{node.title}</span>
+                )}
+            </div>
+            {dimensionLabel ? <span className="ml-auto shrink-0 whitespace-nowrap text-[var(--fs-micro)] font-medium leading-none tabular-nums" style={{ color: theme.node.muted }}>{dimensionLabel}</span> : null}
         </div>
     );
 }
 
-function nodeTypeIcon(type: CanvasNodeType) {
+function nodeTypeIcon(type: CanvasNodeTypeId) {
     if (type === CanvasNodeType.Image) return ImageIcon;
     if (type === CanvasNodeType.Video) return Video;
     if (type === CanvasNodeType.Audio) return Music2;
@@ -582,6 +686,7 @@ function nodeTypeIcon(type: CanvasNodeType) {
     if (type === CanvasNodeType.Script) return Clapperboard;
     if (type === CanvasNodeType.Config) return Settings2;
     if (type === CanvasNodeType.Skill) return BookOpenCheck;
+    if (type === PORTRAIT_CLEARANCE_NODE_TYPE) return PortraitClearanceIcon;
     return Type;
 }
 
@@ -624,7 +729,7 @@ function NodeStatusBadge({ status }: { status: "loading" | "success" | "error" }
     );
 }
 
-function ConnectionSideRail({ side, scale, visible, theme, onPointerDown }: { side: "left" | "right"; scale: number; visible: boolean; theme: CanvasTheme; onPointerDown: (event: React.PointerEvent, anchorRatio: number) => void }) {
+function ConnectionSideRail({ side, scale, theme, onPointerDown }: { side: "left" | "right"; scale: number; theme: CanvasTheme; onPointerDown: (event: React.PointerEvent, anchorRatio: number) => void }) {
     const handleRef = useRef<HTMLSpanElement>(null);
     const anchorRatioRef = useRef(0.5);
     const inverseScale = 1 / Math.max(scale, 0.05);
@@ -633,10 +738,6 @@ function ConnectionSideRail({ side, scale, visible, theme, onPointerDown }: { si
         anchorRatioRef.current = 0.5;
         if (handleRef.current) handleRef.current.style.top = "50%";
     }, []);
-
-    useEffect(() => {
-        if (!visible) resetAnchor();
-    }, [resetAnchor, visible]);
 
     const updateAnchor = (event: React.PointerEvent<HTMLButtonElement>) => {
         const railBounds = event.currentTarget.getBoundingClientRect();
@@ -651,7 +752,7 @@ function ConnectionSideRail({ side, scale, visible, theme, onPointerDown }: { si
     return (
         <button
             type="button"
-            className={`group absolute top-1/2 z-[var(--node-z-overlay)] touch-none -translate-y-1/2 outline-none transition-opacity duration-150 ${visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"}`}
+            className="group pointer-events-auto absolute top-1/2 z-[var(--node-z-overlay)] touch-none -translate-y-1/2 opacity-100 outline-none transition-opacity duration-150"
             style={{ width: 56 * inverseScale, height: `min(100%, ${72 * inverseScale}px)`, ...(side === "left" ? { right: "100%" } : { left: "100%" }) }}
             onPointerEnter={updateAnchor}
             onPointerMove={updateAnchor}

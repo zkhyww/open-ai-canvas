@@ -1,8 +1,9 @@
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
+import { getNodeResourceKind } from "@/lib/canvas/node-registry";
 import { seedanceReferenceLabel } from "@/lib/seedance-video";
 import type { Skill } from "@/services/api/skills";
 import type { Asset, AssetCategory } from "@/stores/use-asset-store";
-import { CanvasNodeType, type CanvasConnection, type CanvasNodeData } from "@/types/canvas";
+import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeTypeId } from "@/types/canvas";
 
 export type CanvasResourceKind = "image" | "video" | "audio" | "text" | "skill" | "character";
 
@@ -16,16 +17,33 @@ export type CanvasResourceReference = {
     storageKey?: string;
     text?: string;
     active: boolean;
-    sourceType?: CanvasNodeType;
+    sourceType?: CanvasNodeTypeId;
     skill?: Skill;
     assetId?: string;
     category?: AssetCategory;
+    mentionToken?: string;
 };
 
+export function canvasSkillMentionToken(skillId: string) {
+    return `@[skill:${skillId}]`;
+}
+
+export function canvasNodeMentionToken(nodeId: string) {
+    return `@[node:${nodeId}]`;
+}
+
 export function canvasResourceMentionToken(reference: CanvasResourceReference) {
-    if (reference.kind === "skill" && reference.skill?.skill_id) return `@[skill:${reference.skill.skill_id}]`;
+    if (reference.mentionToken) return reference.mentionToken;
+    if (reference.kind === "skill" && reference.skill?.skill_id) return canvasSkillMentionToken(reference.skill.skill_id);
     if (reference.assetId) return `@[asset:${reference.assetId}]`;
-    return `@[node:${reference.nodeId}]`;
+    return `@${reference.label}`;
+}
+
+export function normalizeCanvasNodeMentionTokens(prompt: string, references: CanvasResourceReference[]) {
+    return references.reduce((value, reference) => {
+        if (!reference.nodeId || reference.assetId || reference.kind === "skill") return value;
+        return value.split(canvasNodeMentionToken(reference.nodeId)).join(`@${reference.label}`);
+    }, prompt);
 }
 
 export function buildAssetMentionReferences(assets: Asset[]): CanvasResourceReference[] {
@@ -61,6 +79,10 @@ export function buildNodeMentionReferences(node: CanvasNodeData, nodes: CanvasNo
     return labelResourceNodes(getMentionResourceNodes(node.id, nodes, connections), true);
 }
 
+export function buildOrderedCanvasResourceReferences(nodes: CanvasNodeData[], active = true) {
+    return labelResourceNodes(nodes.filter(isResourceNode), active);
+}
+
 export function getMentionResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
     const configInputs = getConnectedConfigResourceNodes(nodeId, nodes, connections);
     if (configInputs.length) return configInputs;
@@ -94,7 +116,11 @@ export function collectUpstreamVideoNodes(nodeId: string, nodes: CanvasNodeData[
     return result;
 }
 
-function getContextResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
+/**
+ * 该节点的直接上游素材节点（按连线取 fromNodeId，只保留构成素材的）。
+ * 扩展节点经 CanvasNodeGraphContext 复用它，不要另写一份取上游的逻辑。
+ */
+export function getContextResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
     return connections
         .filter((connection) => connection.toNodeId === nodeId)
         .map((connection) => nodes.find((node) => node.id === connection.fromNodeId))
@@ -122,7 +148,7 @@ function labelResourceNodes(nodes: CanvasNodeData[], active: boolean) {
                 kind,
                 label,
                 title: node.title || label,
-                previewUrl: node.metadata?.workflowKind === "character" ? node.metadata.characterCoverUrl : node.type === CanvasNodeType.Drawing ? node.metadata?.drawingPreviewUrl : node.metadata?.content,
+                previewUrl: node.metadata?.workflowKind === "character" ? node.metadata.characterCoverUrl : node.type === CanvasNodeType.Drawing ? node.metadata?.drawingPreviewUrl : node.metadata?.previewContent || node.metadata?.content,
                 storageKey: node.metadata?.storageKey,
                 text: node.metadata?.workflowKind === "character" ? node.metadata.characterPrompt : node.type === CanvasNodeType.Text ? node.metadata?.content || node.metadata?.prompt : node.type === CanvasNodeType.Skill ? skillResourceText(node) : undefined,
                 active,
@@ -146,14 +172,9 @@ function isResourceNode(node: CanvasNodeData) {
 }
 
 function resourceKind(node: CanvasNodeData): CanvasResourceKind | null {
+    // 角色卡是跨类型覆盖：任何节点带上角色元数据都按角色处理，故先于按类型判定。
     if (node.metadata?.workflowKind === "character" && node.metadata.characterAssetId) return "character";
-    if (node.type === CanvasNodeType.Image && node.metadata?.content) return "image";
-    if (node.type === CanvasNodeType.Drawing && node.metadata?.drawingId) return "image";
-    if (node.type === CanvasNodeType.Video && node.metadata?.content) return "video";
-    if (node.type === CanvasNodeType.Audio && node.metadata?.content) return "audio";
-    if (node.type === CanvasNodeType.Text && (node.metadata?.content || node.metadata?.prompt)) return "text";
-    if (node.type === CanvasNodeType.Skill && (node.metadata?.skillSnapshot || node.metadata?.content)) return "text";
-    return null;
+    return getNodeResourceKind(node);
 }
 
 function skillResourceText(node: CanvasNodeData) {

@@ -2,10 +2,11 @@ import { create } from "zustand";
 import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 
 import { nanoid } from "nanoid";
-import { parseAssetStorageDocument, rebaseAssetSnapshot, serializeAssetStorageDocument, type AssetStorageDocument } from "@/lib/asset-storage-revision";
+import { normalizeAssetRecord, parseAssetStorageDocument, rebaseAssetSnapshot, serializeAssetStorageDocument, type AssetStorageDocument } from "@/lib/asset-storage-revision";
 import { parseCanvasStorageDocument } from "@/lib/canvas/canvas-storage-revision";
 import { localForageStorageForScope } from "@/lib/localforage-storage";
 import { getActiveUserScope } from "@/lib/user-scope";
+import { resourceFileUrl, resourceIdFromStorageKey } from "@/services/api/resources";
 import { cleanupUnusedImages, collectImageStorageKeys, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { cleanupUnusedMedia, collectMediaStorageKeys, resolveMediaUrl } from "@/services/file-storage";
 import { flushGenerationAssetStorageLocks, insertOrReturnGenerationAsset, withGenerationArtifactCommitLock, withGenerationAssetStorageLock } from "@/services/generation-asset-repository";
@@ -51,9 +52,9 @@ type AssetStore = {
     addAsset: (asset: NewAsset) => string;
     addGenerationAsset: (effectKey: string, asset: NewAsset, signal?: AbortSignal) => Promise<string>;
     updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => void;
-    removeAsset: (id: string) => void;
+    removeAsset: (id: string) => Promise<void>;
     replaceAssets: (assets: Asset[]) => void;
-    cleanupImages: (extra?: unknown) => void;
+    cleanupImages: (extra?: unknown) => Promise<void>;
 };
 
 export const ASSET_STORE_KEY = "infinite-canvas:asset_store";
@@ -143,7 +144,7 @@ function trackAssetOperation<T>(operation: Promise<T>) {
 
 function persistAssetState(name: string, value: StorageValue<AssetStore>) {
     const scope = getActiveUserScope();
-    const nextAssets = value.state.assets;
+    const nextAssets = value.state.assets.map(normalizeAssetRecord);
     const queued = queuedAssetPersists.get(scope);
     const observed = observedAssetPersists.get(scope);
     const baseAssets = assetMemoryStates.get(scope)?.assets ?? observed?.assets ?? [];
@@ -213,24 +214,9 @@ const assetStorage: PersistStorage<AssetStore> = {
             return null;
         }
         const document = parseAssetStorageDocument(value);
-        const assets = await Promise.all(
-            document.state.assets.map(async (asset) => {
-                // 视频和音频的数据结构不同，分别缩窄以保持 Asset 判别联合关系。
-                if (asset.kind === "video" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
-                if (asset.kind === "audio" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
-                if (asset.kind === "model" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
-                if (asset.kind !== "image") return asset;
-                if (asset.data.storageKey)
-                    return {
-                        ...asset,
-                        coverUrl: asset.coverUrl.startsWith("blob:") ? await resolveImageUrl(asset.data.storageKey, asset.coverUrl) : asset.coverUrl,
-                        data: { ...asset.data, dataUrl: await resolveImageUrl(asset.data.storageKey, asset.data.dataUrl) },
-                    };
-                if (!asset.data.dataUrl.startsWith("data:image/")) return asset;
-                const image = await uploadImage(asset.data.dataUrl);
-                return { ...asset, coverUrl: asset.coverUrl.startsWith("data:image/") ? image.url : asset.coverUrl, data: { ...asset.data, dataUrl: image.url, storageKey: image.storageKey, bytes: image.bytes, mimeType: image.mimeType } };
-            }),
-        );
+        // 持久化恢复只恢复结构化记录，不能为每个 resource: key 逐条读取资源元数据或 Blob。
+        // 远程资源直接使用受鉴权的 file URL；本地 legacy key 仍恢复为 Blob URL，避免兼容性回归。
+        const assets = await Promise.all(document.state.assets.map((asset) => normalizePersistedAsset(asset)));
         const hydratedDocument = { ...document, state: { assets } };
         assetMemoryStates.set(scope, { assets });
         recordAssetStorageDocument(scope, hydratedDocument);
@@ -242,6 +228,34 @@ const assetStorage: PersistStorage<AssetStore> = {
         return localForageStorageForScope(scope).removeItem(name);
     },
 };
+
+async function normalizePersistedAsset(asset: Asset): Promise<Asset> {
+    asset = normalizeAssetRecord(asset);
+    const storageKey = "data" in asset && asset.data && "storageKey" in asset.data ? asset.data.storageKey : undefined;
+    const resourceId = resourceIdFromStorageKey(storageKey);
+    if (resourceId) {
+        const url = resourceFileUrl(resourceId);
+        if (asset.kind === "video" || asset.kind === "audio" || asset.kind === "model") return { ...asset, data: { ...asset.data, url } } as Asset;
+        if (asset.kind === "image") return { ...asset, coverUrl: asset.coverUrl.startsWith("blob:") ? url : asset.coverUrl, data: { ...asset.data, dataUrl: url } };
+    }
+
+    // 非 resource: key 是早期本地存储格式，必须继续从 localForage 恢复，
+    // 但只在确有本地 key 时读取，不让远程资源重新走逐条网络查询。
+    if (asset.kind === "video" && storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(storageKey, asset.data.url) } };
+    if (asset.kind === "audio" && storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(storageKey, asset.data.url) } };
+    if (asset.kind === "model" && storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(storageKey, asset.data.url) } };
+    if (asset.kind !== "image") return asset;
+    if (storageKey) {
+        return {
+            ...asset,
+            coverUrl: asset.coverUrl.startsWith("blob:") ? await resolveImageUrl(storageKey, asset.coverUrl) : asset.coverUrl,
+            data: { ...asset.data, dataUrl: await resolveImageUrl(storageKey, asset.data.dataUrl) },
+        };
+    }
+    if (!asset.data.dataUrl.startsWith("data:image/")) return asset;
+    const image = await uploadImage(asset.data.dataUrl);
+    return { ...asset, coverUrl: asset.coverUrl.startsWith("data:image/") ? image.url : asset.coverUrl, data: { ...asset.data, dataUrl: image.url, storageKey: image.storageKey, bytes: image.bytes, mimeType: image.mimeType } };
+}
 
 async function generationAssetId(effectKey: string) {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(effectKey));
@@ -256,7 +270,7 @@ export const useAssetStore = create<AssetStore>()(
             addAsset: (asset) => {
                 const now = new Date().toISOString();
                 const id = nanoid();
-                set((state) => ({ assets: [{ ...asset, id, createdAt: now, updatedAt: now } as Asset, ...state.assets] }));
+                set((state) => ({ assets: [normalizeAssetRecord({ ...asset, id, createdAt: now, updatedAt: now } as Asset), ...state.assets] }));
                 return id;
             },
             addGenerationAsset: (effectKey, asset, signal) => {
@@ -274,13 +288,13 @@ export const useAssetStore = create<AssetStore>()(
                             assetId: id,
                             createAsset: () => {
                                 const now = new Date().toISOString();
-                                return {
+                                return normalizeAssetRecord({
                                     ...asset,
                                     id,
                                     createdAt: now,
                                     updatedAt: now,
                                     metadata: { ...asset.metadata, generationEffectKey: effectKey },
-                                } as Asset;
+                                } as Asset);
                             },
                             updateAssets: (updater) => {
                                 withAssetStorePersistenceSuppressed(() => {
@@ -340,44 +354,54 @@ export const useAssetStore = create<AssetStore>()(
             },
             updateAsset: (id, patch) =>
                 set((state) => ({
-                    assets: state.assets.map((asset) => (asset.id === id ? ({ ...asset, ...patch, updatedAt: new Date().toISOString() } as Asset) : asset)),
+                    assets: state.assets.map((asset) => (asset.id === id ? normalizeAssetRecord({ ...asset, ...patch, updatedAt: new Date().toISOString() } as Asset) : asset)),
                 })),
-            removeAsset: (id) =>
+            removeAsset: async (id) => {
+                let remainingAssets: Asset[] = [];
+                let removedAsset: Asset | undefined;
                 set((state) => {
+                    removedAsset = state.assets.find((asset) => asset.id === id);
                     const assets = state.assets.filter((asset) => asset.id !== id);
-                    get().cleanupImages({ assets });
+                    remainingAssets = assets;
                     return { assets };
-                }),
-            replaceAssets: (assets) => set({ assets }),
-            cleanupImages: (extra) => {
+                });
+                // 没有本地媒体定位时没有需要由该删除动作回收的 Blob；跳过全库扫描，
+                // 避免纯文本/远程资源删除依赖浏览器 IndexedDB 驱动。
+                if (!removedAsset || (!collectImageStorageKeys(removedAsset).size && !collectMediaStorageKeys(removedAsset).size)) return;
+                await get().cleanupImages({ assets: remainingAssets });
+            },
+            replaceAssets: (assets) => set({ assets: assets.map(normalizeAssetRecord) }),
+            cleanupImages: async (extra) => {
                 const scope = getActiveUserScope();
                 const frozenExtraImageKeys = collectImageStorageKeys(extra);
                 const frozenExtraMediaKeys = collectMediaStorageKeys(extra);
-                window.setTimeout(async () => {
-                    await withGenerationArtifactCommitLock(scope, async () => {
-                        // 固定锁序：artifact -> Canvas（释放）-> Asset，避免跨 store 锁重入。
-                        const canvasProjects = await withCanvasStorePersistenceLock(scope, async () => {
-                            await commitPendingCanvasStorePersistenceLocked(scope);
-                            const durableCanvas = parseCanvasStorageDocument(await localForageStorageForScope(scope).getItem(CANVAS_STORE_KEY));
-                            return pendingCanvasStorePersistence(scope)?.projects ?? durableCanvas.state.projects;
-                        });
-                        await withGenerationAssetStorageLock(scope, async () => {
-                            await commitPendingAssetStorePersistenceLocked(scope);
-                            const durableAssets = (await readPersistedAssetDocumentForScope(scope)).state.assets;
-                            const references = { projects: canvasProjects, assets: durableAssets };
-                            const imageKeys = new Set([...frozenExtraImageKeys, ...collectImageStorageKeys(references)]);
-                            const mediaKeys = new Set([...frozenExtraMediaKeys, ...collectMediaStorageKeys(references)]);
-                            await cleanupUnusedImages(
-                                [...imageKeys].map((storageKey) => ({ storageKey })),
-                                scope,
-                            );
-                            await cleanupUnusedMedia(
-                                [...mediaKeys].map((storageKey) => ({ storageKey })),
-                                scope,
-                            );
-                        });
-                    });
-                }, 0);
+                await new Promise<void>((resolve, reject) => {
+                    window.setTimeout(() =>
+                        withGenerationArtifactCommitLock(scope, async () => {
+                            // 固定锁序：artifact -> Canvas（释放）-> Asset，避免跨 store 锁重入。
+                            const canvasProjects = await withCanvasStorePersistenceLock(scope, async () => {
+                                await commitPendingCanvasStorePersistenceLocked(scope);
+                                const durableCanvas = parseCanvasStorageDocument(await localForageStorageForScope(scope).getItem(CANVAS_STORE_KEY));
+                                return pendingCanvasStorePersistence(scope)?.projects ?? durableCanvas.state.projects;
+                            });
+                            await withGenerationAssetStorageLock(scope, async () => {
+                                await commitPendingAssetStorePersistenceLocked(scope);
+                                const durableAssets = (await readPersistedAssetDocumentForScope(scope)).state.assets;
+                                const references = { projects: canvasProjects, assets: durableAssets };
+                                const imageKeys = new Set([...frozenExtraImageKeys, ...collectImageStorageKeys(references)]);
+                                const mediaKeys = new Set([...frozenExtraMediaKeys, ...collectMediaStorageKeys(references)]);
+                                await cleanupUnusedImages(
+                                    [...imageKeys].map((storageKey) => ({ storageKey })),
+                                    scope,
+                                );
+                                await cleanupUnusedMedia(
+                                    [...mediaKeys].map((storageKey) => ({ storageKey })),
+                                    scope,
+                                );
+                            });
+                        }).then(resolve, reject),
+                    );
+                });
             },
         }),
         {

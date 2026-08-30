@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Button, Tooltip } from "antd";
-import { ArrowUp, CheckCircle2, CircleAlert, ImagePlus, LoaderCircle, UserRound, Wrench, X, XCircle } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
+import { ArrowUp, CheckCircle2, CircleAlert, ImagePlus, LoaderCircle, RotateCcw, Sparkles, UserRound, Wrench, X, XCircle } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import type { CanvasAgentOperationImpact } from "@/lib/canvas/canvas-agent-ops";
 import type { LocalUser } from "@/stores/use-user-store";
 import { AIMessageMarkdown } from "@/components/ai/ai-message-markdown";
+import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
+import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import type { Skill } from "@/services/api/skills";
 
 export type CanvasAgentChatAttachment = { id: string; name: string; url: string };
 export type CanvasAgentMode = "online" | "local";
@@ -19,12 +23,36 @@ export type CanvasAgentChatMessage = {
     attachments?: CanvasAgentChatAttachment[];
 };
 
+export type CanvasAgentQuickAction = { label: string; prompt: string };
+
+/**
+ * Turn the short numbered choices the Agent already emits into real UI actions.
+ * This deliberately stays conservative: only assistant messages with 1–4
+ * numbered lines are eligible, and code blocks are ignored.
+ */
+export function extractCanvasAgentQuickActions(text: string): CanvasAgentQuickAction[] {
+    if (!text.trim() || text.includes("```")) return [];
+    const actions: CanvasAgentQuickAction[] = [];
+    const seen = new Set<string>();
+    for (const line of text.split(/\r?\n/u)) {
+        const match = /^\s*(?:[-*]\s*)?(\d{1,2})[.)、]\s*(.+?)\s*$/u.exec(line);
+        if (!match) continue;
+        const label = match[2].replace(/^[*_\s]+|[*_\s]+$/gu, "").trim();
+        if (!label || label.length > 96 || seen.has(label)) continue;
+        seen.add(label);
+        actions.push({ label, prompt: label });
+        if (actions.length >= 4) break;
+    }
+    return actions;
+}
+
 const WORKING_TEXT = "正在推演...";
 
-export function AgentChatMessage({ item, theme, user, isStreaming = false, onRejectTool, onApproveTool }: { item: CanvasAgentChatMessage; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; user: LocalUser | null; isStreaming?: boolean; onRejectTool?: (id: string) => void; onApproveTool?: (id: string) => void }) {
+export function AgentChatMessage({ item, theme, user, isStreaming = false, retrying = false, onRejectTool, onApproveTool, onQuickAction, onRetry }: { item: CanvasAgentChatMessage; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; user: LocalUser | null; isStreaming?: boolean; retrying?: boolean; onRejectTool?: (id: string) => void; onApproveTool?: (id: string) => void; onQuickAction?: (prompt: string) => void; onRetry?: () => void }) {
     const isUser = item.role === "user";
     const isSystem = item.role === "system";
     const color = item.role === "error" ? "#dc2626" : item.role === "tool" ? "#2563eb" : theme.node.text;
+    const quickActions = item.role === "assistant" && !isStreaming ? extractCanvasAgentQuickActions(item.text) : [];
     if (isSystem) {
         return (
             <div className="flex justify-center text-xs">
@@ -49,6 +77,27 @@ export function AgentChatMessage({ item, theme, user, isStreaming = false, onRej
             {!isUser ? <AgentAvatar theme={theme} /> : null}
             <div className={`min-w-0 max-w-[86%] text-sm leading-6 ${isUser ? "rounded-md px-3 py-2.5 text-right" : "text-left"}`} style={{ color, ...(isUser ? { background: theme.accent.primarySoft } : {}) }}>
                 {item.role === "assistant" ? <AIMessageMarkdown className="text-left" isStreaming={isStreaming}>{item.text}</AIMessageMarkdown> : <div className="whitespace-pre-wrap break-words text-left">{item.text}</div>}
+                {item.role === "error" && onRetry ? (
+                    <Button size="small" className="mt-2 !h-7" icon={retrying ? <LoaderCircle className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />} disabled={retrying} onClick={onRetry}>
+                        {retrying ? "重试中" : "重试本轮"}
+                    </Button>
+                ) : null}
+                {quickActions.length && onQuickAction ? (
+                    <div className="mt-3 flex flex-wrap gap-1.5" aria-label="快捷选项">
+                        {quickActions.map((action) => (
+                            <motion.button
+                                key={action.label}
+                                type="button"
+                                className="rounded-full px-3 py-1.5 text-left text-xs font-medium outline-none transition-[background-color,transform,box-shadow] duration-200 focus-visible:ring-2 focus-visible:ring-current/30 hover:-translate-y-px"
+                                style={{ background: theme.spatial.surface, color: theme.node.text, boxShadow: `0 4px 14px ${theme.spatial.shadow}` }}
+                                whileTap={{ scale: 0.97 }}
+                                onClick={() => onQuickAction(action.prompt)}
+                            >
+                                {action.label}
+                            </motion.button>
+                        ))}
+                    </div>
+                ) : null}
                 {item.attachments?.length ? <AgentMessageAttachments attachments={item.attachments} /> : null}
                 {item.meta ? <div className="mt-1 text-[var(--fs-label)] opacity-45">{item.meta}</div> : null}
             </div>
@@ -179,6 +228,9 @@ export function AgentChatComposer({
     onAddFiles,
     onRemoveAttachment,
     left,
+    references = [],
+    slashSkills,
+    includeAssetLibrary,
 }: {
     prompt: string;
     attachments?: CanvasAgentChatAttachment[];
@@ -191,19 +243,96 @@ export function AgentChatComposer({
     onAddFiles?: (files: FileList | File[] | null) => void | Promise<void>;
     onRemoveAttachment?: (id: string) => void;
     left?: ReactNode;
+    /** 供「@」插入的画布节点/素材/技能引用候选（可选，默认空，缺省时退化为普通输入框） */
+    references?: CanvasResourceReference[];
+    /** 供「/」弹出的技能候选（可选） */
+    slashSkills?: Skill[];
+    /** 是否在「@」候选里包含素材库资源 */
+    includeAssetLibrary?: boolean;
 }) {
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [slash, setSlash] = useState<{ start: number; query: string } | null>(null);
+    const [slashIndex, setSlashIndex] = useState(0);
+    const availableSlashSkills = slashSkills ?? [];
     const canSubmit = !disabled && !sending && Boolean(prompt.trim() || attachments.length);
+    const reducedMotion = useReducedMotion();
+    const activeSlashIndex = Math.min(Math.max(slashIndex, 0), Math.max(availableSlashSkills.length - 1, 0));
+
+    // 在输入值末尾检测「/关键词」打开技能候选；选择后替换为 @[skill:xxx] 引用 token（保持在 prompt 文本里）。
+    const handlePromptChange = (value: string) => {
+        onPromptChange(value);
+        const match = /(^|\s)\/([^\s/]*)$/.exec(value);
+        if (match && availableSlashSkills.length) {
+            const next = { start: match.index + match[1].length, query: match[2] };
+            setSlash((current) => (current && current.start === next.start && current.query === next.query ? current : next));
+            setSlashIndex(0);
+        } else if (slash) {
+            setSlash(null);
+        }
+    };
+
+    const applySlashSkill = (skill: Skill) => {
+        const token = `@[skill:${skill.skill_id}] `;
+        const next = slash
+            ? `${prompt.slice(0, slash.start)}${token}${prompt.slice(slash.start + slash.query.length)}`
+            : prompt
+                ? `${prompt.replace(/\s+$/u, "")} ${token}`
+                : token;
+        setSlash(null);
+        setSlashIndex(0);
+        onPromptChange(next);
+    };
+
+    // slash 菜单的键盘控制在 capture 阶段拦截（contentEditable/textarea 内部先消费 Enter，外层冒泡拿不到）
+    const handleSlashKeyCapture = (event: ReactKeyboardEvent) => {
+        if (!slash || !availableSlashSkills.length) return;
+        if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+        if (event.key === "ArrowDown") {
+            event.preventDefault();
+            event.stopPropagation();
+            setSlashIndex((index) => Math.min(index + 1, availableSlashSkills.length - 1));
+        } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            event.stopPropagation();
+            setSlashIndex((index) => Math.max(index - 1, 0));
+        } else if (event.key === "Enter" || event.key === "Tab") {
+            event.preventDefault();
+            event.stopPropagation();
+            applySlashSkill(availableSlashSkills[activeSlashIndex]);
+        } else if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            setSlash(null);
+        }
+    };
+
+    // 保留粘贴图片成附件（contentEditable 模式内部会把粘贴转纯文本，capture 阶段先拦截图片）
+    const handlePasteCapture = (event: ReactClipboardEvent) => {
+        if (!onAddFiles) return;
+        const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+        if (!images.length) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void onAddFiles(images);
+    };
+
     return (
-        <div className="px-3 pb-3 pt-1" onWheelCapture={(event) => event.stopPropagation()}>
-            <div className="rounded-lg border px-3 pb-2.5 pt-3 transition-[border-color,box-shadow] duration-150 focus-within:border-current" style={{ background: theme.node.fill, borderColor: theme.toolbar.border, color: theme.accent.primary, boxShadow: `0 10px 30px ${theme.spatial.shadow}` }}>
+        <div className="px-3 pb-3 pt-2" onWheelCapture={(event) => event.stopPropagation()}>
+            <div
+                className="group/composer rounded-[22px] px-3 pb-2.5 pt-3 transition-[background-color,box-shadow,transform] duration-200 focus-within:-translate-y-px"
+                style={{
+                    background: theme.node.fill,
+                    color: theme.accent.primary,
+                    boxShadow: `0 16px 40px ${theme.spatial.shadow}, inset 0 1px 0 rgba(255,255,255,0.045)`,
+                }}
+            >
                 {attachments.length ? (
                     <div className="thin-scrollbar mb-2 flex gap-2 overflow-x-auto pb-1">
                         {attachments.map((item) => (
                             <div key={item.id} className="group relative size-14 shrink-0 overflow-hidden rounded-md" title={item.name}>
                                 <img src={item.url} alt={item.name} className="size-full object-cover" />
                                 {onRemoveAttachment ? (
-                                    <button type="button" className="absolute right-1 top-1 grid size-5 place-items-center rounded-full border opacity-0 shadow-sm transition group-hover:opacity-100" style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text }} onClick={() => onRemoveAttachment(item.id)} aria-label="移除图片">
+                                    <button type="button" className="absolute right-1 top-1 grid size-5 place-items-center rounded-full opacity-0 shadow-sm transition group-hover:opacity-100" style={{ background: theme.toolbar.panel, color: theme.node.text }} onClick={() => onRemoveAttachment(item.id)} aria-label="移除图片">
                                         <X className="size-3" />
                                     </button>
                                 ) : null}
@@ -211,25 +340,47 @@ export function AgentChatComposer({
                         ))}
                     </div>
                 ) : null}
-                <textarea
-                    value={prompt}
-                    onChange={(event) => onPromptChange(event.target.value)}
-                    onPaste={(event) => {
-                        if (!onAddFiles) return;
-                        const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
-                        if (!images.length) return;
-                        event.preventDefault();
-                        void onAddFiles(images);
-                    }}
-                    onKeyDown={(event) => {
-                        if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey) return;
-                        event.preventDefault();
-                        void onSubmit();
-                    }}
-                    className="thin-scrollbar max-h-40 min-h-[60px] w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-5 outline-none placeholder:opacity-45"
-                    style={{ color: theme.node.text }}
-                    placeholder={placeholder}
-                />
+                <div className="relative" onKeyDownCapture={handleSlashKeyCapture} onPasteCapture={handlePasteCapture}>
+                    <div className="thin-scrollbar max-h-40 min-h-[60px] overflow-y-auto">
+                        <CanvasResourceMentionTextarea
+                            value={prompt}
+                            references={references}
+                            includeAssetLibrary={includeAssetLibrary}
+                            sendOnEnter={false}
+                            disabled={disabled}
+                            onChange={handlePromptChange}
+                            onSubmit={onSubmit}
+                            className="w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-5 outline-none placeholder:opacity-45"
+                            containerClassName="min-h-[60px]"
+                            style={{ color: theme.node.text }}
+                            placeholder={placeholder}
+                            aria-label="Agent 输入"
+                        />
+                    </div>
+                    {slash && availableSlashSkills.length ? (
+                        <div
+                            data-agent-slash-menu
+                            className="absolute bottom-full left-0 z-[var(--z-toolbar)] mb-2 w-full max-w-xs overflow-hidden rounded-2xl p-1.5 shadow-2xl"
+                            style={{ background: theme.toolbar.panel, boxShadow: `0 18px 44px ${theme.spatial.shadow}` }}
+                            onMouseDown={(event) => event.preventDefault()}
+                        >
+                            {availableSlashSkills.map((skill, index) => (
+                                <button
+                                    key={skill.skill_id}
+                                    type="button"
+                                    className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs"
+                                    style={{ background: index === activeSlashIndex ? theme.toolbar.itemHover : "transparent", color: theme.node.text }}
+                                    onMouseEnter={() => setSlashIndex(index)}
+                                    onClick={() => applySlashSkill(skill)}
+                                >
+                                    <Sparkles className="size-3.5 shrink-0 opacity-70" />
+                                    <span className="min-w-0 truncate font-medium">{skill.skill_name}</span>
+                                    {skill.description ? <span className="min-w-0 flex-1 truncate opacity-50">{skill.description}</span> : null}
+                                </button>
+                            ))}
+                        </div>
+                    ) : null}
+                </div>
                 <div className="mt-2 flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-1">
                         {onAddFiles ? (
@@ -239,13 +390,38 @@ export function AgentChatComposer({
                                     event.target.value = "";
                                 }} />
                                 <Tooltip title="上传图片">
-                                    <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" disabled={sending} style={{ color: theme.node.muted }} icon={<ImagePlus className="size-4" />} onClick={() => fileInputRef.current?.click()} />
+                                    <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8 !transition-transform hover:!scale-105 active:!scale-95" disabled={sending} style={{ color: theme.node.muted }} icon={<ImagePlus className="size-4" />} onClick={() => fileInputRef.current?.click()} />
                                 </Tooltip>
                             </>
                         ) : null}
                         {left}
                     </div>
-                    <Button type="primary" className="!h-8 !w-8 !min-w-8 !rounded-md !p-0" disabled={!canSubmit} icon={sending ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />} onClick={() => void onSubmit()} aria-label="发送" />
+                    <motion.button
+                        type="button"
+                        disabled={!canSubmit}
+                        aria-label={sending ? "发送中" : "发送"}
+                        onClick={() => void onSubmit()}
+                        whileHover={canSubmit && !reducedMotion ? { scale: 1.06, y: -1 } : undefined}
+                        whileTap={canSubmit && !reducedMotion ? { scale: 0.9, y: 1 } : undefined}
+                        animate={sending && !reducedMotion ? { scale: [1, 0.94, 1], rotate: [0, -5, 5, 0] } : { scale: 1, rotate: 0 }}
+                        transition={sending && !reducedMotion ? { duration: 0.42, ease: "easeOut" } : { type: "spring", stiffness: 420, damping: 24 }}
+                        className="grid size-9 shrink-0 place-items-center rounded-full p-0 outline-none transition-[background-color,box-shadow,color,transform] duration-200 focus-visible:ring-2 focus-visible:ring-current/35 disabled:cursor-not-allowed"
+                        style={{
+                            background: canSubmit || sending ? theme.accent.primary : theme.spatial.surface,
+                            color: canSubmit || sending ? theme.accent.onPrimary : theme.node.muted,
+                            boxShadow: canSubmit || sending ? `0 8px 20px ${theme.accent.primary}45` : "none",
+                        }}
+                    >
+                        <motion.span
+                            key={sending ? "sending" : "ready"}
+                            initial={reducedMotion ? false : { opacity: 0, scale: 0.65, rotate: sending ? -25 : 25 }}
+                            animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                            transition={{ duration: reducedMotion ? 0 : 0.18, ease: "easeOut" }}
+                            className="grid place-items-center"
+                        >
+                            {sending ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
+                        </motion.span>
+                    </motion.button>
                 </div>
             </div>
         </div>
@@ -254,11 +430,11 @@ export function AgentChatComposer({
 
 export function AgentPanelTabs<T extends string>({ value, items, theme, right, onChange }: { value: T; items: { value: T; label: string; icon?: ReactNode; count?: number }[]; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; right?: ReactNode; onChange: (value: T) => void }) {
     return (
-        <div className="shrink-0 px-3 pb-2">
-            <div className="flex min-h-9 items-center justify-between gap-2 rounded-md p-1" style={{ background: theme.spatial.surface }}>
-                <nav className="grid min-w-0 flex-1 grid-flow-col auto-cols-fr items-center gap-0.5 text-xs" role="tablist" aria-label="Agent 面板">
+        <div className="shrink-0 px-3 pb-1">
+            <div className="flex min-h-8 items-center justify-between gap-2 rounded-lg px-0.5 py-0.5" style={{ background: "transparent" }}>
+                <nav className="grid min-w-0 flex-1 grid-flow-col auto-cols-fr items-center gap-0.5 text-[var(--fs-label)]" role="tablist" aria-label="Agent 面板">
                     {items.map((item) => (
-                        <button key={item.value} type="button" role="tab" aria-selected={value === item.value} className={`inline-flex h-8 min-w-0 items-center justify-center gap-1 rounded-[var(--r-sm)] px-1.5 transition-colors ${value === item.value ? "font-medium" : "font-normal"}`} style={{ background: value === item.value ? theme.node.fill : "transparent", color: value === item.value ? theme.node.text : theme.node.muted, boxShadow: value === item.value ? `0 1px 5px ${theme.spatial.shadow}` : "none" }} onClick={() => onChange(item.value)}>
+                        <button key={item.value} type="button" role="tab" aria-selected={value === item.value} className={`inline-flex h-7 min-w-0 items-center justify-center gap-1 rounded-md px-1.5 transition-colors ${value === item.value ? "font-medium" : "font-normal"}`} style={{ background: value === item.value ? theme.node.fill : "transparent", color: value === item.value ? theme.node.text : theme.node.muted, boxShadow: value === item.value ? `0 2px 8px ${theme.spatial.shadow}` : "none" }} onClick={() => onChange(item.value)}>
                             <span className="shrink-0">{item.icon}</span>
                             <span className="min-w-0 truncate">{item.label}</span>
                             {item.count ? <span className="shrink-0 tabular-nums opacity-60">{item.count}</span> : null}

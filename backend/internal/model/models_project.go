@@ -1,6 +1,19 @@
 package model
 
-import "time"
+import (
+	"html"
+	"regexp"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
+
+var projectUnitHTMLTagPattern = regexp.MustCompile(`<[^>]+>`)
+
+func ProjectUnitWordCount(sourceText string) int {
+	plainText := projectUnitHTMLTagPattern.ReplaceAllString(sourceText, "")
+	return utf8.RuneCountInString(strings.TrimSpace(html.UnescapeString(plainText)))
+}
 
 const AssetIDMaxLength = 80
 
@@ -12,7 +25,7 @@ type Resource struct {
 	Provider string         `json:"provider" gorm:"size:24"`
 	Endpoint string         `json:"endpoint"`
 	Bucket   string         `json:"bucket" gorm:"size:160"`
-	// 用户 OSS 每次修改都会生成新版本，资源固定引用创建时的存储与密钥；同一存储位置的 CDN 域名可跟随当前配置。
+	// 用户 OSS 每次修改都会生成新版本，资源固定引用创建时的存储与密钥；只有同一存储位置才可复用当前 CDN。
 	StorageSettingID string    `json:"-" gorm:"index;size:36"`
 	ObjectKey        string    `json:"objectKey" gorm:"index"`
 	PublicURL        string    `json:"publicUrl"`
@@ -25,6 +38,36 @@ type Resource struct {
 	Error            string    `json:"error"`
 	CreatedAt        time.Time `json:"createdAt" gorm:"index:idx_resources_user_created,priority:2"`
 	UpdatedAt        time.Time `json:"updatedAt"`
+}
+
+// ResourceDeletionJob is the durable handoff between database deletion and
+// physical object cleanup. Storage fields are frozen because the Resource row
+// is removed in the same transaction that creates this job.
+type ResourceDeletionJob struct {
+	ID               string                 `json:"id" gorm:"primaryKey;size:36"`
+	UserID           string                 `json:"userId" gorm:"index;size:36"`
+	ResourceID       string                 `json:"resourceId" gorm:"index;size:36"`
+	Provider         string                 `json:"provider" gorm:"size:24"`
+	Endpoint         string                 `json:"endpoint"`
+	Bucket           string                 `json:"bucket" gorm:"size:160"`
+	StorageSettingID string                 `json:"-" gorm:"index;size:36"`
+	ObjectKey        string                 `json:"objectKey" gorm:"index"`
+	Status           ResourceDeletionStatus `json:"status" gorm:"index:idx_resource_deletion_jobs_due,priority:1;size:24"`
+	Attempts         int                    `json:"attempts"`
+	LastError        string                 `json:"lastError" gorm:"type:text"`
+	NextAttemptAt    time.Time              `json:"nextAttemptAt" gorm:"index:idx_resource_deletion_jobs_due,priority:2"`
+	LeaseOwner       string                 `json:"-" gorm:"index;size:120"`
+	LeaseExpiresAt   *time.Time             `json:"-" gorm:"index"`
+	CreatedAt        time.Time              `json:"createdAt"`
+	UpdatedAt        time.Time              `json:"updatedAt"`
+}
+
+// AnnouncementImageDraft marks an uploaded image as temporary until an
+// announcement create or update transaction consumes it.
+type AnnouncementImageDraft struct {
+	ResourceID string    `json:"resourceId" gorm:"primaryKey;size:36"`
+	UserID     string    `json:"userId" gorm:"index;size:36"`
+	CreatedAt  time.Time `json:"createdAt" gorm:"index"`
 }
 
 type Asset struct {
@@ -42,19 +85,35 @@ type Asset struct {
 
 type ProjectAssetLink struct {
 	ID        string    `json:"id" gorm:"primaryKey;size:36"`
-	ProjectID string    `json:"projectId" gorm:"index;size:36;uniqueIndex:idx_project_asset_links_unique,priority:1"`
+	ProjectID string    `json:"projectId" gorm:"index;size:36;uniqueIndex:idx_project_asset_links_unique,priority:1;index:idx_project_asset_links_project_folder_position,priority:1"`
 	AssetID   string    `json:"assetId" gorm:"index;size:80;uniqueIndex:idx_project_asset_links_unique,priority:2"`
+	FolderID  string    `json:"folderId,omitempty" gorm:"index;size:36;index:idx_project_asset_links_project_folder_position,priority:2"`
+	Position  int       `json:"position" gorm:"index;index:idx_project_asset_links_project_folder_position,priority:3"`
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// ProjectAssetFolder 只保存项目内的目录结构；真实媒体仍由 Asset/Resource 唯一持有。
+type ProjectAssetFolder struct {
+	ID        string    `json:"id" gorm:"primaryKey;size:36"`
+	ProjectID string    `json:"projectId" gorm:"index;size:36;uniqueIndex:idx_project_asset_folders_sibling_name,priority:1"`
+	ParentID  string    `json:"parentId,omitempty" gorm:"index;size:36;uniqueIndex:idx_project_asset_folders_sibling_name,priority:2"`
+	Name      string    `json:"name" gorm:"size:240"`
+	NameKey   string    `json:"-" gorm:"size:240;uniqueIndex:idx_project_asset_folders_sibling_name,priority:3"`
+	Style     string    `json:"style" gorm:"size:24"`
+	Theme     string    `json:"theme" gorm:"size:24"`
+	Position  int       `json:"position" gorm:"index"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type ProjectAssetCandidate struct {
 	ID              string        `json:"id" gorm:"primaryKey;size:36"`
-	ProjectID       string        `json:"projectId" gorm:"index;size:36"`
-	UnitID          string        `json:"unitId,omitempty" gorm:"index;size:36"`
+	ProjectID       string        `json:"projectId" gorm:"index;size:36;index:idx_project_asset_candidates_project_unit_status,priority:1;index:idx_project_asset_candidates_project_status_category,priority:1"`
+	UnitID          string        `json:"unitId,omitempty" gorm:"index;size:36;index:idx_project_asset_candidates_project_unit_status,priority:2"`
 	ShotID          string        `json:"shotId,omitempty" gorm:"index;size:36"`
 	Name            string        `json:"name" gorm:"size:240"`
-	Category        AssetCategory `json:"category" gorm:"index;size:32"`
-	Status          string        `json:"status" gorm:"index;size:32"`
+	Category        AssetCategory `json:"category" gorm:"index;size:32;index:idx_project_asset_candidates_project_status_category,priority:3"`
+	Status          string        `json:"status" gorm:"index;size:32;index:idx_project_asset_candidates_project_unit_status,priority:3;index:idx_project_asset_candidates_project_status_category,priority:2"`
 	DetailsJSON     string        `json:"detailsJson" gorm:"type:text"`
 	ResolvedAssetID string        `json:"resolvedAssetId,omitempty" gorm:"index;size:80"`
 	CreatedAt       time.Time     `json:"createdAt"`
@@ -111,19 +170,22 @@ type CharacterVoiceBinding struct {
 
 // Project 是短剧领域聚合根；CanvasProject 仍代表可独立创作的画布文档。
 type Project struct {
-	ID               string        `json:"id" gorm:"primaryKey;size:36"`
-	UserID           string        `json:"userId" gorm:"index;size:36;uniqueIndex:idx_projects_user_name,priority:1"`
-	Name             string        `json:"name" gorm:"size:240;uniqueIndex:idx_projects_user_name,priority:2"`
-	Type             string        `json:"type" gorm:"size:32;index"`
-	AspectRatio      string        `json:"aspectRatio" gorm:"size:16"`
-	SourceType       string        `json:"sourceType" gorm:"size:32"`
-	Description      string        `json:"description" gorm:"type:text"`
-	StylePresetID    string        `json:"stylePresetId" gorm:"size:64"`
-	StyleProfileJSON string        `json:"styleProfileJson" gorm:"type:text"`
-	Status           ProjectStatus `json:"status" gorm:"index;size:24"`
-	Revision         int64         `json:"revision"`
-	CreatedAt        time.Time     `json:"createdAt"`
-	UpdatedAt        time.Time     `json:"updatedAt" gorm:"index"`
+	ID                string        `json:"id" gorm:"primaryKey;size:36"`
+	UserID            string        `json:"userId" gorm:"index;size:36;uniqueIndex:idx_projects_user_name,priority:1"`
+	Name              string        `json:"name" gorm:"size:240;uniqueIndex:idx_projects_user_name,priority:2"`
+	Type              string        `json:"type" gorm:"size:32;index"`
+	AspectRatio       string        `json:"aspectRatio" gorm:"size:16"`
+	SourceType        string        `json:"sourceType" gorm:"size:32"`
+	Description       string        `json:"description" gorm:"type:text"`
+	CoverResourceID   string        `json:"coverResourceId,omitempty" gorm:"index;size:36"`
+	StylePresetID     string        `json:"stylePresetId" gorm:"size:64"`
+	StyleProfileJSON  string        `json:"styleProfileJson" gorm:"type:text"`
+	DefaultImageModel string        `json:"defaultImageModel,omitempty" gorm:"size:500"`
+	DefaultVideoModel string        `json:"defaultVideoModel,omitempty" gorm:"size:500"`
+	Status            ProjectStatus `json:"status" gorm:"index;size:24"`
+	Revision          int64         `json:"revision"`
+	CreatedAt         time.Time     `json:"createdAt"`
+	UpdatedAt         time.Time     `json:"updatedAt" gorm:"index"`
 }
 
 // StyleProfile 是用户可持续编辑的风格源；项目只保存应用当时的 JSON 快照，避免源对象更新污染历史生成。
@@ -144,37 +206,78 @@ type StyleProfile struct {
 
 type ProjectUnit struct {
 	ID         string            `json:"id" gorm:"primaryKey;size:36"`
-	ProjectID  string            `json:"projectId" gorm:"index;size:36"`
+	ProjectID  string            `json:"projectId" gorm:"index;size:36;index:idx_project_units_project_position,priority:1"`
 	ParentID   string            `json:"parentId,omitempty" gorm:"index;size:36"`
 	Kind       ProjectUnitKind   `json:"kind" gorm:"index;size:24"`
 	Title      string            `json:"title" gorm:"size:240"`
 	SourceText string            `json:"sourceText" gorm:"type:text"`
+	WordCount  int               `json:"wordCount"`
 	Status     ProjectUnitStatus `json:"status" gorm:"index;size:24"`
-	Position   int               `json:"position"`
+	Position   int               `json:"position" gorm:"index:idx_project_units_project_position,priority:2"`
 	CreatedAt  time.Time         `json:"createdAt"`
 	UpdatedAt  time.Time         `json:"updatedAt"`
 }
 
 type CanvasUnitLink struct {
 	ID        string    `json:"id" gorm:"primaryKey;size:36"`
-	ProjectID string    `json:"projectId" gorm:"index;size:36;uniqueIndex:idx_canvas_unit_links_unique,priority:1"`
+	ProjectID string    `json:"projectId" gorm:"index;size:36;uniqueIndex:idx_canvas_unit_links_unique,priority:1;index:idx_canvas_unit_links_project_unit,priority:1"`
 	CanvasID  string    `json:"canvasId" gorm:"index;size:80;uniqueIndex:idx_canvas_unit_links_unique,priority:2"`
-	UnitID    string    `json:"unitId" gorm:"index;size:36;uniqueIndex:idx_canvas_unit_links_unique,priority:3"`
+	UnitID    string    `json:"unitId" gorm:"index;size:36;uniqueIndex:idx_canvas_unit_links_unique,priority:3;index:idx_canvas_unit_links_project_unit,priority:2"`
 	Role      string    `json:"role" gorm:"size:32"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
 type Shot struct {
-	ID          string    `json:"id" gorm:"primaryKey;size:36"`
-	ProjectID   string    `json:"projectId" gorm:"index;size:36"`
-	UnitID      string    `json:"unitId" gorm:"index;size:36"`
-	Title       string    `json:"title" gorm:"size:240"`
-	Description string    `json:"description" gorm:"type:text"`
-	Position    int       `json:"position"`
-	DurationMs  int64     `json:"durationMs"`
-	Status      string    `json:"status" gorm:"index;size:24"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID                string    `json:"id" gorm:"primaryKey;size:36"`
+	ProjectID         string    `json:"projectId" gorm:"index;size:36;index:idx_shots_project_unit_position,priority:1"`
+	UnitID            string    `json:"unitId" gorm:"index;size:36;index:idx_shots_project_unit_position,priority:2"`
+	CurrentRevisionID string    `json:"currentRevisionId,omitempty" gorm:"index;size:36"`
+	Title             string    `json:"title" gorm:"size:240"`
+	Description       string    `json:"description" gorm:"type:text"`
+	Position          int       `json:"position" gorm:"index:idx_shots_project_unit_position,priority:3"`
+	DurationMs        int64     `json:"durationMs"`
+	Status            string    `json:"status" gorm:"index;size:24"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+}
+
+// ShotRevision 保存可复现的分镜脚本版本；Shot 只保留稳定身份、排序和当前版本指针。
+type ShotRevision struct {
+	ID              string    `json:"id" gorm:"primaryKey;size:36"`
+	ShotID          string    `json:"shotId" gorm:"index;size:36;uniqueIndex:idx_shot_revisions_version,priority:1"`
+	Version         int       `json:"version" gorm:"uniqueIndex:idx_shot_revisions_version,priority:2"`
+	PlotDescription string    `json:"plotDescription" gorm:"type:text"`
+	Action          string    `json:"action" gorm:"type:text"`
+	Dialogue        string    `json:"dialogue" gorm:"type:text"`
+	ShotSize        string    `json:"shotSize" gorm:"size:80"`
+	CameraAngle     string    `json:"cameraAngle" gorm:"size:80"`
+	CameraMovement  string    `json:"cameraMovement" gorm:"size:120"`
+	DurationMs      int64     `json:"durationMs"`
+	ImagePrompt     string    `json:"imagePrompt" gorm:"type:text"`
+	VideoPrompt     string    `json:"videoPrompt" gorm:"type:text"`
+	NegativePrompt  string    `json:"negativePrompt" gorm:"type:text"`
+	ContinuityNotes string    `json:"continuityNotes" gorm:"type:text"`
+	ActionBeatsJSON string    `json:"actionBeatsJson" gorm:"type:text"`
+	CreatedBy       string    `json:"createdBy,omitempty" gorm:"index;size:36"`
+	CreatedAt       time.Time `json:"createdAt"`
+}
+
+// ShotArtifact 是镜头的版本化生产产物。修改分镜或资产引用时只标记 stale，不删除历史。
+type ShotArtifact struct {
+	ID           string    `json:"id" gorm:"primaryKey;size:36"`
+	ProjectID    string    `json:"projectId" gorm:"index;size:36;index:idx_shot_artifacts_project_unit,priority:1"`
+	UnitID       string    `json:"unitId" gorm:"index;size:36;index:idx_shot_artifacts_project_unit,priority:2"`
+	ShotID       string    `json:"shotId" gorm:"index;size:36;uniqueIndex:idx_shot_artifacts_version,priority:1"`
+	RevisionID   string    `json:"revisionId,omitempty" gorm:"index;size:36"`
+	TaskID       string    `json:"taskId,omitempty" gorm:"index;size:36"`
+	Type         string    `json:"type" gorm:"index;size:40;uniqueIndex:idx_shot_artifacts_version,priority:2"`
+	Version      int       `json:"version" gorm:"uniqueIndex:idx_shot_artifacts_version,priority:3"`
+	ResourceID   string    `json:"resourceId,omitempty" gorm:"index;size:36"`
+	Status       string    `json:"status" gorm:"index;size:24"`
+	Selected     bool      `json:"selected" gorm:"index"`
+	MetadataJSON string    `json:"metadataJson" gorm:"type:text"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 type ShotAssetReference struct {
@@ -230,14 +333,28 @@ type WorkflowStepTask struct {
 	CreatedAt      time.Time `json:"createdAt"`
 }
 
+// ProductionTaskLink 显式区分领域项目、画布和镜头上下文，避免继续复用 Task.ProjectID 表达多种身份。
+type ProductionTaskLink struct {
+	ID             string    `json:"id" gorm:"primaryKey;size:36"`
+	TaskID         string    `json:"taskId" gorm:"index;size:36;uniqueIndex:idx_production_task_context,priority:1"`
+	ProjectID      string    `json:"projectId" gorm:"index;size:36"`
+	CanvasID       string    `json:"canvasId,omitempty" gorm:"index;size:80"`
+	UnitID         string    `json:"unitId,omitempty" gorm:"index;size:36"`
+	ShotID         string    `json:"shotId,omitempty" gorm:"index;size:36;uniqueIndex:idx_production_task_context,priority:2"`
+	WorkflowStepID string    `json:"workflowStepId,omitempty" gorm:"index;size:36"`
+	ArtifactType   string    `json:"artifactType,omitempty" gorm:"index;size:40;uniqueIndex:idx_production_task_context,priority:3"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
 type CanvasProject struct {
 	ID          string    `json:"id" gorm:"primaryKey;size:80"`
-	UserID      string    `json:"userId" gorm:"index;size:36;index:idx_canvas_projects_user_updated,priority:1"`
-	ProjectID   string    `json:"projectId,omitempty" gorm:"index;size:36"`
+	UserID      string    `json:"userId" gorm:"index;size:36;index:idx_canvas_projects_user_updated,priority:1;index:idx_canvas_projects_user_project_updated,priority:1"`
+	ProjectID   string    `json:"projectId,omitempty" gorm:"index;size:36;index:idx_canvas_projects_user_project_updated,priority:2"`
 	Title       string    `json:"title" gorm:"size:240"`
 	PayloadJSON string    `json:"payloadJson" gorm:"type:text"`
 	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt" gorm:"index:idx_canvas_projects_user_updated,priority:2"`
+	UpdatedAt   time.Time `json:"updatedAt" gorm:"index:idx_canvas_projects_user_updated,priority:2;index:idx_canvas_projects_user_project_updated,priority:3"`
 }
 
 type CanvasShare struct {
@@ -278,16 +395,19 @@ type UserPromptCustomization struct {
 }
 
 type Announcement struct {
-	ID          string             `json:"id" gorm:"primaryKey;size:36"`
-	Title       string             `json:"title" gorm:"size:120"`
-	Content     string             `json:"content" gorm:"type:text"`
-	Level       AnnouncementLevel  `json:"level" gorm:"index;size:24"`
-	Status      AnnouncementStatus `json:"status" gorm:"index;size:24;index:idx_announcements_status_published,priority:1"`
-	CreatedBy   string             `json:"createdBy" gorm:"index;size:36"`
-	PublishedAt time.Time          `json:"publishedAt" gorm:"index:idx_announcements_status_published,priority:2"`
-	ClosedAt    *time.Time         `json:"closedAt"`
-	CreatedAt   time.Time          `json:"createdAt"`
-	UpdatedAt   time.Time          `json:"updatedAt"`
+	ID              string             `json:"id" gorm:"primaryKey;size:36"`
+	Title           string             `json:"title" gorm:"size:120"`
+	Content         string             `json:"content" gorm:"type:text"`
+	ImageResourceID string             `json:"imageResourceId,omitempty" gorm:"index;size:36"`
+	ImageURL        string             `json:"imageUrl,omitempty" gorm:"-"`
+	Level           AnnouncementLevel  `json:"level" gorm:"index;size:24"`
+	Pinned          bool               `json:"pinned" gorm:"index"`
+	Status          AnnouncementStatus `json:"status" gorm:"index;size:24;index:idx_announcements_status_published,priority:1"`
+	CreatedBy       string             `json:"createdBy" gorm:"index;size:36"`
+	PublishedAt     time.Time          `json:"publishedAt" gorm:"index:idx_announcements_status_published,priority:2"`
+	ClosedAt        *time.Time         `json:"closedAt"`
+	CreatedAt       time.Time          `json:"createdAt"`
+	UpdatedAt       time.Time          `json:"updatedAt"`
 }
 
 type UserAnnouncementRead struct {

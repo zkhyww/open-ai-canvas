@@ -36,6 +36,9 @@ export function generationTaskStageLabel(task: GenerationTaskDisplayTarget) {
 
 export function generationTaskShowsProgress(task: GenerationTaskDisplayTarget) {
     if (isGenerationTaskSubmissionUncertain(task)) return false;
+    // 排队、后端接管和连接供应商都没有真实百分比。只有上游状态响应
+    // 已经写回任务后才显示进度，避免所有图片/视频长期停在同一个假数值。
+    if (["等待队列调度", "后端接管任务", "正在连接上游", "调用生成模型"].includes(task.stage || "")) return false;
     return !(task.provider === "dreamina-cli" && task.status === "running" && (task.stage === "submitting" || task.stage === "submitted"));
 }
 
@@ -43,6 +46,7 @@ export const operationOptions = [
     { label: "Agent 会话：拆解影视工作流", value: "agent_session" },
     { label: "文生视频", value: "text_to_video" },
     { label: "图生视频", value: "image_to_video" },
+    { label: "全模态参考", value: "reference_to_video" },
     { label: "视频续写", value: "extend" },
     { label: "视频局部修改", value: "inpaint" },
     { label: "元素替换", value: "replace_element" },

@@ -41,7 +41,9 @@ func (s *Service) startProviderCancellationReconciliation() {
 				continue
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			_ = s.reconcileProviderCancellation(ctx, task)
+			if err := s.reconcileProviderCancellation(ctx, task); err != nil {
+				_ = s.log(task.UserID, task.ID, "error", "上游取消状态对账失败", err.Error())
+			}
 			cancel()
 		}
 	}()
@@ -71,6 +73,22 @@ func (s *Service) requestProviderCancellation(ctx context.Context, task *model.T
 	if err != nil {
 		return s.markProviderCancellationUncertain(task, "读取上游取消配置失败，费用待核对："+err.Error())
 	}
+	if isComfyBridgeInterface(input.Config.InterfaceType) {
+		// 尚未领取的请求可以确定取消并退款；已经在本机执行的工作流只能丢弃迟到结果并转人工核对。
+		request, requestErr := s.repo.ComfyBridgeRequest(task.ProviderRequestID)
+		s.CancelComfyBridgeRequest(task.ProviderRequestID)
+		if requestErr == nil && request.Status == "queued" {
+			if err := s.taskBilling().RefundBilling(task.BillingOrderID, "本地 ComfyUI Bridge 请求在领取前取消"); err != nil {
+				return s.markProviderCancellationUncertain(task, "Bridge 请求已取消，但积分退回失败："+err.Error())
+			}
+			now := time.Now()
+			if err := s.repo.UpdateTaskProviderCancellation(task.ID, model.ProviderCancelStatusRequested, model.ProviderCancelStatusConfirmed, "", nil, &now); err != nil {
+				return err
+			}
+			return nil
+		}
+		return s.markProviderCancellationUncertain(task, "本地 ComfyUI Bridge 不支持取消已领取工作流，执行状态待核对")
+	}
 	if !supportsProviderCancellation(input.Config.InterfaceType) {
 		return s.markProviderCancellationUncertain(task, "当前上游协议不支持取消，费用待核对")
 	}
@@ -89,6 +107,7 @@ func (s *Service) requestProviderCancellation(ctx context.Context, task *model.T
 }
 
 func (s *Service) reconcileProviderCancellation(ctx context.Context, task *model.Task) error {
+	billing := s.taskBilling()
 	if task.ProviderCancelAttempts >= providerCancellationMaxAttempts {
 		return s.markProviderCancellationUncertain(task, "上游取消状态长时间未确认，费用待核对")
 	}
@@ -111,7 +130,7 @@ func (s *Service) reconcileProviderCancellation(ctx context.Context, task *model
 
 	switch outcome {
 	case providerCancellationConfirmed:
-		if err := s.RefundBilling(task.BillingOrderID, "上游已确认取消"); err != nil {
+		if err := billing.RefundBilling(task.BillingOrderID, "上游已确认取消"); err != nil {
 			return s.deferProviderCancellation(task, "上游已取消，但积分退回失败："+err.Error())
 		}
 		now := time.Now()
@@ -121,17 +140,24 @@ func (s *Service) reconcileProviderCancellation(ctx context.Context, task *model
 		_ = s.log(task.UserID, task.ID, "info", "上游已确认取消，积分已退回", providerStatus)
 	case providerCancellationSucceeded:
 		errorText := "取消请求发出前上游已完成，费用已结算"
-		if err := s.SettleBilling(task.BillingOrderID, task.ProviderRequestID); err != nil {
+		var billingErr error
+		if err := billing.SettleBilling(task.BillingOrderID, task.ProviderRequestID); err != nil {
 			errorText = "取消请求发出前上游已完成，但费用结算失败，需人工核对：" + err.Error()
-			_ = s.MarkBillingUncertain(task.BillingOrderID, errorText)
+			billingErr = fmt.Errorf("取消确认后的计费结算失败：%w", err)
+			if uncertainErr := billing.MarkBillingUncertain(task.BillingOrderID, errorText); uncertainErr != nil {
+				billingErr = errors.Join(billingErr, fmt.Errorf("记录取消确认后的计费待核对状态失败：%w", uncertainErr))
+			}
 		}
 		if err := s.repo.UpdateTaskProviderCancellation(task.ID, model.ProviderCancelStatusRequested, model.ProviderCancelStatusUncertain, errorText, nil, nil); err != nil {
 			return err
 		}
 		_ = s.log(task.UserID, task.ID, "warn", "上游任务在取消确认前已完成", providerStatus)
+		if billingErr != nil {
+			return billingErr
+		}
 	case providerCancellationFailed:
 		errorText := "上游任务已失败，取消状态无法确认，积分已退回"
-		if err := s.RefundBilling(task.BillingOrderID, errorText); err != nil {
+		if err := billing.RefundBilling(task.BillingOrderID, errorText); err != nil {
 			return s.deferProviderCancellation(task, "上游任务已失败，但积分退回失败："+err.Error())
 		}
 		if err := s.repo.UpdateTaskProviderCancellation(task.ID, model.ProviderCancelStatusRequested, model.ProviderCancelStatusUncertain, errorText, nil, nil); err != nil {
@@ -155,7 +181,7 @@ func (s *Service) markProviderCancellationUncertain(task *model.Task, errorText 
 	if err := s.repo.UpdateTaskProviderCancellation(task.ID, model.ProviderCancelStatusRequested, model.ProviderCancelStatusUncertain, message, nil, nil); err != nil {
 		return err
 	}
-	if err := s.MarkBillingUncertain(task.BillingOrderID, message); err != nil {
+	if err := s.taskBilling().MarkBillingUncertain(task.BillingOrderID, message); err != nil {
 		_ = s.log(task.UserID, task.ID, "error", "上游取消已转入人工核对，但计费状态更新失败", err.Error())
 		return err
 	}

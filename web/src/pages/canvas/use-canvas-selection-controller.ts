@@ -19,7 +19,8 @@ type UseCanvasSelectionControllerOptions = {
     onCanvasSelectionStart: () => void;
     onNodeInteractionStart: (selectionModifier: boolean) => void;
     onNodeClick: (node: CanvasNodeData) => void;
-    onBatchConnectionTarget?: (event: ReactMouseEvent, nodeId: string) => boolean;
+    onBatchConnectionTarget?: (event: ReactMouseEvent | ReactPointerEvent, nodeId: string) => boolean;
+    onLinkedFolderDrop?: (folder: CanvasNodeData, nodes: CanvasNodeData[]) => void;
     onDeselect: () => void;
     onSelectionBoxEnd?: () => void;
 };
@@ -59,6 +60,7 @@ export function useCanvasSelectionController({
     onNodeInteractionStart,
     onNodeClick,
     onBatchConnectionTarget,
+    onLinkedFolderDrop,
     onDeselect,
     onSelectionBoxEnd,
 }: UseCanvasSelectionControllerOptions) {
@@ -125,7 +127,7 @@ export function useCanvasSelectionController({
         setSelectedConnectionId(null);
     }, [cancelPendingConnectionCreate, nodesRef, onCanvasSelectionStart, screenToCanvas, selectedNodeIdsRef, setSelectedConnectionId]);
 
-    const handleNodeMouseDown = useCallback((event: ReactMouseEvent, nodeId: string) => {
+    const handleNodeMouseDown = useCallback((event: ReactMouseEvent | ReactPointerEvent, nodeId: string) => {
         event.stopPropagation();
         if (event.button !== 0) return;
         if (onBatchConnectionTarget?.(event, nodeId)) return;
@@ -205,13 +207,16 @@ export function useCanvasSelectionController({
         setAlignmentGuides({});
         if (dragRef.current.hasMoved) {
             const draggedNodeIds = new Set(dragRef.current.draggedNodeIds);
-            setNodes((currentNodes) => {
-                const positioned = clientX == null || clientY == null ? currentNodes : currentNodes.map((node) => {
-                    const initial = initialById.get(node.id);
-                    return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
-                });
-                return applyFrameDrop(positioned, draggedNodeIds, findFrameDropTarget(positioned, draggedNodeIds));
+            const positioned = clientX == null || clientY == null ? nodesRef.current : nodesRef.current.map((node) => {
+                const initial = initialById.get(node.id);
+                return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
             });
+            const targetId = findFrameDropTarget(positioned, draggedNodeIds);
+            const target = targetId ? positioned.find((node) => node.id === targetId) : undefined;
+            const linkedFolder = target?.metadata?.folder?.assetFolderId ? target : undefined;
+            // 素材库文件夹只建立归档关系，不把画布节点变成其本地子节点。
+            setNodes(linkedFolder ? positioned : applyFrameDrop(positioned, draggedNodeIds, targetId));
+            if (linkedFolder) onLinkedFolderDrop?.(linkedFolder, positioned.filter((node) => draggedNodeIds.has(node.id)));
         }
         setFrameDropTargetId(null);
         alignmentContextRef.current = null;
@@ -220,9 +225,9 @@ export function useCanvasSelectionController({
             const clickedNode = nodesRef.current.find((node) => node.id === clickedNodeId);
             if (clickedNode) onNodeClick(clickedNode);
         }
-    }, [historyPausedRef, nodesRef, onNodeClick, setNodes, viewportRef]);
+    }, [historyPausedRef, nodesRef, onLinkedFolderDrop, onNodeClick, setNodes, viewportRef]);
 
-    const handleMouseMove = useCallback((event: MouseEvent) => {
+    const handleNodeDragMove = useCallback((event: MouseEvent | PointerEvent) => {
         if (!dragRef.current.isDraggingNode) return;
         const currentViewport = viewportRef.current;
         pendingNodeDragRef.current = { x: (event.clientX - dragRef.current.startX) / currentViewport.k, y: (event.clientY - dragRef.current.startY) / currentViewport.k };
@@ -251,6 +256,10 @@ export function useCanvasSelectionController({
     }, [nodesRef, viewportRef]);
 
     const handlePointerMove = useCallback((event: PointerEvent) => {
+        if (dragRef.current.isDraggingNode) {
+            handleNodeDragMove(event);
+            return;
+        }
         const currentSelection = selectionBoxRef.current;
         if (!currentSelection) return;
         if (event.buttons === 0) {
@@ -294,7 +303,7 @@ export function useCanvasSelectionController({
             selectedNodeIdsRef.current = nextSelected;
             setSelectedNodeIds(nextSelected);
         });
-    }, [cancelSelectionBox, containerRef, screenToCanvas, selectedNodeIdsRef, setSelectedNodeIds, viewportRef]);
+    }, [cancelSelectionBox, containerRef, handleNodeDragMove, screenToCanvas, selectedNodeIdsRef, setSelectedNodeIds, viewportRef]);
 
     const finishSelection = useCallback(() => {
         const hadPendingSelection = Boolean(selectionBoxRef.current);
@@ -311,7 +320,7 @@ export function useCanvasSelectionController({
         };
         const handlePointerUp = (event: PointerEvent) => finishNodeDrag(event.clientX, event.clientY);
         const cancel = () => finishNodeDrag();
-        window.addEventListener("mousemove", handleMouseMove);
+        window.addEventListener("mousemove", handleNodeDragMove);
         window.addEventListener("mouseup", handleMouseUp);
         window.addEventListener("pointermove", handlePointerMove);
         window.addEventListener("pointerup", handlePointerUp);
@@ -320,14 +329,14 @@ export function useCanvasSelectionController({
         return () => {
             if (dragFrameRef.current) cancelAnimationFrame(dragFrameRef.current);
             if (selectionFrameRef.current) cancelAnimationFrame(selectionFrameRef.current);
-            window.removeEventListener("mousemove", handleMouseMove);
+            window.removeEventListener("mousemove", handleNodeDragMove);
             window.removeEventListener("mouseup", handleMouseUp);
             window.removeEventListener("pointermove", handlePointerMove);
             window.removeEventListener("pointerup", handlePointerUp);
             window.removeEventListener("pointercancel", cancel);
             window.removeEventListener("blur", cancel);
         };
-    }, [finishNodeDrag, finishSelection, handleMouseMove, handlePointerMove]);
+    }, [finishNodeDrag, finishSelection, handleNodeDragMove, handlePointerMove]);
 
     return {
         alignmentGuides,

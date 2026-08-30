@@ -1,5 +1,5 @@
 import { CanvasNodeContextMenu } from "@/components/canvas/canvas-context-menu";
-import { CanvasNodeType, type CanvasNodeData, type CanvasWorkspaceMode, type ContextMenuState, type Position } from "@/types/canvas";
+import { CanvasNodeType, type CanvasNodeData, type CanvasNodeTypeId, type CanvasWorkspaceMode, type ContextMenuState, type Position } from "@/types/canvas";
 
 type CanvasAssetCategory = NonNullable<NonNullable<CanvasNodeData["metadata"]>["assetCategory"]>;
 
@@ -13,7 +13,8 @@ type CanvasProjectContextMenuProps = {
     canPaste: boolean;
     screenToCanvas: (clientX: number, clientY: number) => Position;
     onClose: () => void;
-    onAddNode: (type: CanvasNodeType, position: Position) => void;
+    onAddNode: (type: CanvasNodeTypeId, position: Position) => void;
+    onAddFolder: (position: Position) => void;
     onChooseStyle: () => void;
     onOpenDirector: (position?: Position) => void;
     onUpload: (nodeId: string | undefined, position: Position) => void;
@@ -33,6 +34,7 @@ type CanvasProjectContextMenuProps = {
     onGenerateImage: (node: CanvasNodeData) => void;
     onCopyContent: (node: CanvasNodeData | null) => void;
     onCopyMediaUrl: (node: CanvasNodeData | null) => void;
+    onUploadToArkPrivateAsset: (node: CanvasNodeData) => void;
     onSetAssetCategory: (nodeId: string, category: CanvasAssetCategory) => void;
     onToggleFrame: (node: CanvasNodeData) => void;
 };
@@ -52,6 +54,9 @@ export function CanvasProjectContextMenu({ menu, node, screenToCanvas, ...props 
             onClose={props.onClose}
             onAddNode={(type) => {
                 if (menu.type === "canvas") props.onAddNode(type, menu.position);
+            }}
+            onAddFolder={() => {
+                if (menu.type === "canvas") props.onAddFolder(menu.position);
             }}
             onChooseStyle={props.onChooseStyle}
             onOpenDirector={props.onOpenDirector}
@@ -88,6 +93,9 @@ export function CanvasProjectContextMenu({ menu, node, screenToCanvas, ...props 
             }}
             onCopyContent={() => props.onCopyContent(node)}
             onCopyMediaUrl={() => props.onCopyMediaUrl(node)}
+            onUploadToArkPrivateAsset={() => {
+                if (node?.type === CanvasNodeType.Image) props.onUploadToArkPrivateAsset(node);
+            }}
             onSetAssetCategory={(category) => {
                 if (menu.type === "node") props.onSetAssetCategory(menu.nodeId, category);
             }}

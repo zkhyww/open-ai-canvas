@@ -1,320 +1,78 @@
 {
-  "schemaVersion": 1,
-  "replacements": [
-    {
-      "target": "web/index.html",
-      "old": "<meta name=\"description\" content=\"影策，让一个故事从文字走向银幕。面向 AI 影视与短剧创作的开源工作台。\" />",
-      "new": "<meta name=\"description\" content=\"巨天，让一个故事从文字走向银幕。面向 AI 影视与短剧创作的开源工作台。\" />",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/index.html",
-      "old": "<title>影策</title>",
-      "new": "<title>巨天</title>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/components/layout/workspace-top-bar.tsx",
-      "old": "<Link to=\"/\" className=\"app-workspace-brand-link inline-flex min-w-0 items-center gap-2 text-foreground\" title=\"影策工作台\">",
-      "new": "<Link to=\"/\" className=\"app-workspace-brand-link inline-flex min-w-0 items-center gap-2 text-foreground\" title=\"巨天工作台\">",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/components/layout/workspace-top-bar.tsx",
-      "old": "<span className=\"app-workspace-brand-wordmark truncate text-[var(--fs-body)] font-semibold\">影策</span>",
-      "new": "<span className=\"app-workspace-brand-wordmark truncate text-[var(--fs-body)] font-semibold\">巨天</span>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/components/layout/app-top-nav.tsx",
-      "old": "<Link to=\"/\" className=\"flex min-w-0 items-center gap-2\" title=\"影策\">",
-      "new": "<Link to=\"/\" className=\"flex min-w-0 items-center gap-2\" title=\"巨天\">",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/components/layout/app-top-nav.tsx",
-      "old": "<span className=\"truncate text-[var(--fs-body)] font-semibold\">影策</span>",
-      "new": "<span className=\"truncate text-[var(--fs-body)] font-semibold\">巨天</span>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/home/index.tsx",
-      "old": "<div className=\"inline-flex items-center gap-2 text-xs font-semibold text-foreground/48\"><WorkspaceSignalIcon variant=\"home\" size=\"sm\" />影策</div>",
-      "new": "<div className=\"inline-flex items-center gap-2 text-xs font-semibold text-foreground/48\"><WorkspaceSignalIcon variant=\"home\" size=\"sm\" />巨天</div>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/auth/auth-scene.tsx",
-      "old": "<section className=\"relative min-h-[250px] overflow-hidden sm:min-h-[320px] lg:min-h-0\" aria-label=\"影策品牌影片\">",
-      "new": "<section className=\"relative min-h-[250px] overflow-hidden sm:min-h-[320px] lg:min-h-0\" aria-label=\"巨天品牌影片\">",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/auth/auth-scene.tsx",
-      "old": "<span className=\"size-7 bg-current\" style={{ mask: \"url(/logo.svg) center / contain no-repeat\", WebkitMask: \"url(/logo.svg) center / contain no-repeat\" }} />\n                            影策\n                        </Link>",
-      "new": "<span className=\"size-7 bg-current\" style={{ mask: \"url(/logo.svg) center / contain no-repeat\", WebkitMask: \"url(/logo.svg) center / contain no-repeat\" }} />\n                            巨天\n                        </Link>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/auth/auth-scene.tsx",
-      "old": "<p className=\"text-xs font-semibold tracking-[0.18em] text-white/58\">YINGCE STUDIO</p>",
-      "new": "<p className=\"text-xs font-semibold tracking-[0.18em] text-white/58\">JUTIAN STUDIO</p>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/assets/index.tsx",
-      "old": "<span className=\"assets-empty-banner-caption\"><span>影策素材库</span>把每次创作的结果，留档成可复用的资产</span>",
-      "new": "<span className=\"assets-empty-banner-caption\"><span>巨天素材库</span>把每次创作的结果，留档成可复用的资产</span>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/create/index.tsx",
-      "old": "<p>影策 · AI 影视创作工作台</p>",
-      "new": "<p>巨天 · AI 影视创作工作台</p>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/create/index.tsx",
-      "old": "<h1>把脑海里的画面，<span className=\"creation-intro-emphasis\"><span className=\"is-pink\">交给影策</span><span className=\"is-blue\">拍出来</span></span></h1>",
-      "new": "<h1>把脑海里的画面，<span className=\"creation-intro-emphasis\"><span className=\"is-pink\">交给巨天</span><span className=\"is-blue\">拍出来</span></span></h1>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/create/index.tsx",
-      "old": "<span className=\"creation-empty-art-caption\"><span>影策</span>把每一帧，交给镜头导演</span>",
-      "new": "<span className=\"creation-empty-art-caption\"><span>巨天</span>把每一帧，交给镜头导演</span>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/create/index.tsx",
-      "old": "if (mode === \"image\") return { title: \"正在为你画这一镜\", hint: \"影策正在理解你的构图意图，并把画面交给模型出图。\", steps: [\"理解构图\", \"定调画风\", \"生成画面\"] };",
-      "new": "if (mode === \"image\") return { title: \"正在为你画这一镜\", hint: \"巨天正在理解你的构图意图，并把画面交给模型出图。\", steps: [\"理解构图\", \"定调画风\", \"生成画面\"] };",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/create/index.tsx",
-      "old": "if (mode === \"text\") return { title: \"正在为你写这段\", hint: \"影策正在梳理你的创作脉络，组织语言与结构。\", steps: [\"梳理脉络\", \"组织语言\", \"输出段落\"] };",
-      "new": "if (mode === \"text\") return { title: \"正在为你写这段\", hint: \"巨天正在梳理你的创作脉络，组织语言与结构。\", steps: [\"梳理脉络\", \"组织语言\", \"输出段落\"] };",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/create/index.tsx",
-      "old": "return { title: \"正在为你拍这一镜\", hint: \"影策正在拆解你的镜头脚本，设计运镜与光线，并交给模型渲染成片。\", steps: [\"拆解镜头\", \"设计运镜\", \"定调布光\", \"渲染成片\"] };",
-      "new": "return { title: \"正在为你拍这一镜\", hint: \"巨天正在拆解你的镜头脚本，设计运镜与光线，并交给模型渲染成片。\", steps: [\"拆解镜头\", \"设计运镜\", \"定调布光\", \"渲染成片\"] };",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/create/index.tsx",
-      "old": "<span className=\"storyboard-workbench-handoff-badge\"><ArrowDown />交给影策 AI</span>",
-      "new": "<span className=\"storyboard-workbench-handoff-badge\"><ArrowDown />交给巨天 AI</span>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/create/index.tsx",
-      "old": "<span className=\"storyboard-workbench-turn-role is-ai\"><Sparkles />影策 AI</span>",
-      "new": "<span className=\"storyboard-workbench-turn-role is-ai\"><Sparkles />巨天 AI</span>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/create/index.tsx",
-      "old": "<span>在下方写下这一镜的镜头、画面或故事。影策会拆解脚本、设计运镜并渲染成片，这一镜会作为 SC.{String(shotNumber).padStart(2, \"0\")} 自动加入镜头轨道。</span>",
-      "new": "<span>在下方写下这一镜的镜头、画面或故事。巨天会拆解脚本、设计运镜并渲染成片，这一镜会作为 SC.{String(shotNumber).padStart(2, \"0\")} 自动加入镜头轨道。</span>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/create/index.tsx",
-      "old": "<strong>{mode === \"image\" ? \"图像生成\" : mode === \"video\" ? \"视频生成\" : \"影策 AI\"}</strong>",
-      "new": "<strong>{mode === \"image\" ? \"图像生成\" : mode === \"video\" ? \"视频生成\" : \"巨天 AI\"}</strong>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/create/index.tsx",
-      "old": "<span className=\"creation-message-progress-copy\">{item.status === \"pending\" ? `影策正在生成${mode === \"video\" ? \"视频\" : \"图像\"}……`",
-      "new": "<span className=\"creation-message-progress-copy\">{item.status === \"pending\" ? `巨天正在生成${mode === \"video\" ? \"视频\" : \"图像\"}……`",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/create/index.tsx",
-      "old": "<span className=\"sr-only\">影策正在生成{mode === \"video\" ? \"视频\" : \"图像\"}</span>",
-      "new": "<span className=\"sr-only\">巨天正在生成{mode === \"video\" ? \"视频\" : \"图像\"}</span>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/admin/components/admin-shell.tsx",
-      "old": "<Link to=\"/\" className=\"flex min-w-0 flex-1 items-center gap-2\" title=\"影策\">",
-      "new": "<Link to=\"/\" className=\"flex min-w-0 flex-1 items-center gap-2\" title=\"巨天\">",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/admin/components/admin-shell.tsx",
-      "old": "<span className=\"min-w-0\"><span className=\"block truncate text-[var(--fs-body)] font-semibold\">影策</span><span className=\"block truncate text-[var(--fs-micro)] text-foreground/42\">管理后台</span></span>",
-      "new": "<span className=\"min-w-0\"><span className=\"block truncate text-[var(--fs-body)] font-semibold\">巨天</span><span className=\"block truncate text-[var(--fs-micro)] text-foreground/42\">管理后台</span></span>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/admin/components/email-settings-panel.tsx",
-      "old": "<Form.Item name=\"fromName\" label=\"发件人名称\"><Input placeholder=\"影策\" /></Form.Item>",
-      "new": "<Form.Item name=\"fromName\" label=\"发件人名称\"><Input placeholder=\"巨天\" /></Form.Item>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/components/canvas/canvas-local-agent-panel.tsx",
-      "old": "\"影策 Canvas Agent 诊断日志\"",
-      "new": "\"巨天 Canvas Agent 诊断日志\"",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/components/canvas/canvas-assistant-panel.tsx",
-      "old": "\"你是影策网页内置在线画布助手。当前画布 JSON 会随用户消息提供。首轮必须调用工具：只读问题调用 canvas_get_state，需要改动画布时调用和本地 Agent 一致的 infinite-canvas 工具。需要生成内容时直接调用 canvas_generate_text、canvas_generate_image、canvas_generate_video、canvas_generate_audio 或 canvas_create_generation_flow；需要精确批量操作时调用 canvas_apply_ops。不要输出 JSON ops，不要编造执行结果。工具参数涉及已有节点时必须使用当前画布 JSON 中真实存在的 id；缺少必要 id 或用户意图不明确时直接说明需要用户明确选择或说明，不要猜测。工具返回结果后，再根据真实结果回答用户。\"",
-      "new": "\"你是巨天网页内置在线画布助手。当前画布 JSON 会随用户消息提供。首轮必须调用工具：只读问题调用 canvas_get_state，需要改动画布时调用和本地 Agent 一致的 infinite-canvas 工具。需要生成内容时直接调用 canvas_generate_text、canvas_generate_image、canvas_generate_video、canvas_generate_audio 或 canvas_create_generation_flow；需要精确批量操作时调用 canvas_apply_ops。不要输出 JSON ops，不要编造执行结果。工具参数涉及已有节点时必须使用当前画布 JSON 中真实存在的 id；缺少必要 id 或用户意图不明确时直接说明需要用户明确选择或说明，不要猜测。工具返回结果后，再根据真实结果回答用户。\"",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/components/canvas/canvas-assistant-panel.tsx",
-      "old": "\"影策网站 Agent 诊断日志\"",
-      "new": "\"巨天网站 Agent 诊断日志\"",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/lib/canvas/canvas-export.ts",
-      "old": "export async function exportCanvasProjects(projects: CanvasProject[], fileName = \"影策画布\") {",
-      "new": "export async function exportCanvasProjects(projects: CanvasProject[], fileName = \"巨天画布\") {",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/components/canvas/canvas-project-card.tsx",
-      "old": "{ key: \"export\", icon: <Download className=\"size-3.5\" />, label: \"导出画布\", onClick: () => void exportCanvasProjects([project], project.title || \"影策画布\") }",
-      "new": "{ key: \"export\", icon: <Download className=\"size-3.5\" />, label: \"导出画布\", onClick: () => void exportCanvasProjects([project], project.title || \"巨天画布\") }",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "web/src/pages/canvas/index.tsx",
-      "old": "onClick={() => void exportCanvasProjects(selectedProjects, `影策画布-${selectedIds.length}个画布`)}",
-      "new": "onClick={() => void exportCanvasProjects(selectedProjects, `巨天画布-${selectedIds.length}个画布`)}",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "backend/internal/service/email.go",
-      "old": "sendSMTPMail(setting, email, \"影策注册验证码\", registrationEmailBody(code))",
-      "new": "sendSMTPMail(setting, email, \"巨天注册验证码\", registrationEmailBody(code))",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "backend/internal/service/email.go",
-      "old": "value.FromName = \"影策\"",
-      "new": "value.FromName = \"巨天\"",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "backend/internal/service/email.go",
-      "old": "return \"你正在注册影策。\\n\\n验证码：\" + code + \"\\n\\n验证码 10 分钟内有效。若非本人操作，请忽略本邮件。\"",
-      "new": "return \"你正在注册巨天。\\n\\n验证码：\" + code + \"\\n\\n验证码 10 分钟内有效。若非本人操作，请忽略本邮件。\"",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "canvas-agent/src/config.ts",
-      "old": "export const AGENT_PROMPT = \"你正在帮助用户操作影策网页画布。需要改动画布时优先使用已配置的 infinite-canvas MCP 工具：先 canvas_get_state 读取当前画布，再根据任务使用 canvas_create_text_node、canvas_generate_text、canvas_generate_image、canvas_generate_video、canvas_generate_audio、canvas_create_generation_flow、canvas_run_generation、canvas_update_node、canvas_connect_nodes 等通用工具；复杂批量改动再用 canvas_apply_ops，删除连线可用 delete_connections。需要生成内容时直接调用对应生成工具，不要绑定特定业务场景。即使用户明确点名 Dreamina/即梦，本机 Canvas Agent 也必须通过 canvas_generate_image 或 canvas_generate_video 进入共享 GenerationTask；本机图片模型使用 model=local:dreamina-cli:5.0 这类产品模型值，用户选择自动分辨率时使用 quality=auto；禁止调用 direct dreamina_cli provider tool。不要模拟鼠标点击，不要要求用户手动复制 JSON。\";",
-      "new": "export const AGENT_PROMPT = \"你正在帮助用户操作巨天网页画布。需要改动画布时优先使用已配置的 infinite-canvas MCP 工具：先 canvas_get_state 读取当前画布，再根据任务使用 canvas_create_text_node、canvas_generate_text、canvas_generate_image、canvas_generate_video、canvas_generate_audio、canvas_create_generation_flow、canvas_run_generation、canvas_update_node、canvas_connect_nodes 等通用工具；复杂批量改动再用 canvas_apply_ops，删除连线可用 delete_connections。需要生成内容时直接调用对应生成工具，不要绑定特定业务场景。即使用户明确点名 Dreamina/即梦，本机 Canvas Agent 也必须通过 canvas_generate_image 或 canvas_generate_video 进入共享 GenerationTask；本机图片模型使用 model=local:dreamina-cli:5.0 这类产品模型值，用户选择自动分辨率时使用 quality=auto；禁止调用 direct dreamina_cli provider tool。不要模拟鼠标点击，不要要求用户手动复制 JSON。\";",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "canvas-agent/src/agents.ts",
-      "old": "clientInfo: { name: \"canvas-agent\", title: \"影策 Canvas Agent\", version: VERSION }",
-      "new": "clientInfo: { name: \"canvas-agent\", title: \"巨天 Canvas Agent\", version: VERSION }",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "canvas-agent/README.md",
-      "old": "# 影策 Canvas Agent",
-      "new": "# 巨天 Canvas Agent",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "canvas-agent/README.md",
-      "old": "使用时可以直接在 Codex 里说“打开影策”，插件会优先启动本地画布和本地 Agent，读取 Local URL 和 Connect token，然后直接打开画布网页地址新建并连接画布。如果自动连接失败，再检查本地画布服务和 Canvas Agent 是否都已启动。",
-      "new": "使用时可以直接在 Codex 里说“打开巨天”，插件会优先启动本地画布和本地 Agent，读取 Local URL 和 Connect token，然后直接打开画布网页地址新建并连接画布。如果自动连接失败，再检查本地画布服务和 Canvas Agent 是否都已启动。",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "README.md",
-      "old": "<img src=\"web/public/logo.svg\" width=\"88\" alt=\"影策 logo\">",
-      "new": "<img src=\"web/public/logo.svg\" width=\"88\" alt=\"巨天 logo\">",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "README.md",
-      "old": "<h1 align=\"center\">影策</h1>",
-      "new": "<h1 align=\"center\">巨天</h1>",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "README.md",
-      "old": "一个故事也许始于一页小说、一个人物，或一句还没写完的对白。影策从章节中梳理角色与情节，让人物的外观、声音和气质成为可复用的角色资产，再把分镜、图片、视频和音频组织在同一张画布上。从最初的文字到可以被看见、被听见的镜头，创作者始终掌握故事的方向。",
-      "new": "一个故事也许始于一页小说、一个人物，或一句还没写完的对白。巨天从章节中梳理角色与情节，让人物的外观、声音和气质成为可复用的角色资产，再把分镜、图片、视频和音频组织在同一张画布上。从最初的文字到可以被看见、被听见的镜头，创作者始终掌握故事的方向。",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "README.md",
-      "old": "影策是一款面向 AI 影视与短剧创作的开源工作台，集成自由画布、结构化分镜、角色卡、3D 导演台、素材库、异步生成任务和 Agent 协作能力。",
-      "new": "巨天是一款面向 AI 影视与短剧创作的开源工作台，集成自由画布、结构化分镜、角色卡、3D 导演台、素材库、异步生成任务和 Agent 协作能力。",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "README.md",
-      "old": "<img src=\"assets/qq.jpg\" alt=\"影策 QQ 交流群\" width=\"360\">",
-      "new": "<img src=\"assets/qq.jpg\" alt=\"巨天 QQ 交流群\" width=\"360\">",
-      "expectedCount": 1,
-      "userVisible": true
-    },
-    {
-      "target": "scripts/install-server.sh",
-      "old": "step \"下载影策源码\"",
-      "new": "step \"下载巨天源码\"",
-      "expectedCount": 1,
-      "userVisible": true
-    }
+  "schemaVersion": 2,
+  "mappings": [
+    { "old": "YINGCE STUDIO", "new": "JUTIAN STUDIO" },
+    { "old": "Yingce", "new": "Jutian" },
+    { "old": "影策", "new": "巨天" }
+  ],
+  "targets": [
+    ".agents/plugins/marketplace.json",
+    "README.md",
+    "backend/cmd/server/main.go",
+    "backend/internal/protocol/builtin_test.go",
+    "backend/internal/protocol/docs/agnes-video.md",
+    "backend/internal/protocol/docs/async-audio.md",
+    "backend/internal/protocol/docs/autodl-comfyui.md",
+    "backend/internal/protocol/docs/chat-completion.md",
+    "backend/internal/protocol/docs/claude-api.md",
+    "backend/internal/protocol/docs/gemini-image.md",
+    "backend/internal/protocol/docs/gemini-veo.md",
+    "backend/internal/protocol/docs/minimax-video.md",
+    "backend/internal/protocol/docs/newapi-channel-1.md",
+    "backend/internal/protocol/docs/newapi-channel-2.md",
+    "backend/internal/protocol/docs/openai-audio.md",
+    "backend/internal/protocol/docs/openai-image.md",
+    "backend/internal/protocol/docs/openai-response.md",
+    "backend/internal/protocol/docs/volcengine-jimeng-image.md",
+    "backend/internal/protocol/docs/xai-video.md",
+    "backend/internal/protocol/documentation.go",
+    "backend/internal/service/diagnostics.go",
+    "backend/internal/service/email.go",
+    "backend/internal/service/libtv_adapter.go",
+    "backend/internal/service/libtv.go",
+    "backend/internal/service/protocol_runtime_test.go",
+    "backend/internal/service/seed/skills.json",
+    "backend/internal/service/workflow_plugins.go",
+    "canvas-agent/README.md",
+    "canvas-agent/src/agents.ts",
+    "canvas-agent/src/config.ts",
+    "plugin-packages/autodl-comfyui/manifest.json",
+    "plugins/yingce/.codex-plugin/plugin.json",
+    "plugins/yingce/README.md",
+    "plugins/yingce/skills/README.md",
+    "plugins/yingce/skills/asset-aware-generation/SKILL.md",
+    "plugins/yingce/skills/canvas-context/SKILL.md",
+    "plugins/yingce/skills/canvas-editing/SKILL.md",
+    "plugins/yingce/skills/canvas/SKILL.md",
+    "plugins/yingce/skills/open-canvas/SKILL.md",
+    "scripts/install-server.sh",
+    "scripts/start-local.ps1",
+    "web/index.html",
+    "web/src/components/canvas/canvas-assistant-panel.tsx",
+    "web/src/components/canvas/canvas-folder-card.tsx",
+    "web/src/components/canvas/canvas-local-agent-panel.tsx",
+    "web/src/components/canvas/canvas-project-card.tsx",
+    "web/src/components/layout/workspace-sidebar-nav.tsx",
+    "web/src/components/layout/workspace-top-bar.tsx",
+    "web/src/lib/canvas/canvas-export.ts",
+    "web/src/lib/plugins/builtin/eagle.ts",
+    "web/src/lib/plugins/builtin/portrait-clearance.ts",
+    "web/src/lib/plugins/builtin/prompt-optimizer.ts",
+    "web/src/lib/plugins/builtin/workflows.ts",
+    "web/src/lib/portrait-clearance/vision.ts",
+    "web/src/pages/admin/components/admin-shell.tsx",
+    "web/src/pages/admin/components/email-settings-panel.tsx",
+    "web/src/pages/admin/settings/libtv-settings-page.tsx",
+    "web/src/pages/assets/index.tsx",
+    "web/src/pages/auth/auth-scene.tsx",
+    "web/src/pages/canvas/index.tsx",
+    "web/src/pages/create/index.tsx",
+    "web/src/pages/home/index.tsx",
+    "web/src/pages/plugins/eagle.tsx",
+    "web/src/pages/plugins/index.tsx",
+    "web/src/pages/plugins/plugin-development-guide.md",
+    "web/src/pages/plugins/plugin-documentation-modals.tsx",
+    "web/src/styles/globals.css",
+    "web/test/workspace-route-loading.test.ts"
   ]
 }

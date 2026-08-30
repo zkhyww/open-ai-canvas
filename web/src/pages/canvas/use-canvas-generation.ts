@@ -2,16 +2,15 @@ import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateA
 import { useQueryClient } from "@tanstack/react-query";
 import { App } from "antd";
 
-import { applyGenerationTaskResultToNodes, generationTaskNodeId } from "@/lib/canvas/canvas-generation-task-sync";
+import { applyGenerationTaskResultToNodes, generationTaskCanReloadResource, generationTaskNodeId } from "@/lib/canvas/canvas-generation-task-sync";
 import { applyCanvasGenerationTaskNodeEffect, isCanvasGenerationDurableAckError } from "@/services/canvas-generation-consumer";
 import { consumeGenerationTaskNode, ensureCanvasNodeAsset } from "@/services/project-asset-sync";
-import { cancelGenerationTask, listGenerationTasks, listTaskLogs, queryGenerationTask, subscribeGenerationTasks, type GenerationTask, type TaskLog } from "@/services/api/task-center";
+import { listGenerationTasks, listTaskLogs, queryGenerationTask, subscribeGenerationTasks, type GenerationTask, type TaskLog } from "@/services/api/task-center";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { cinematicStoryboardColumns, storyboardRowsFromTask } from "@/lib/canvas/canvas-project-domain";
 import { generationTaskMetadata } from "@/lib/canvas/canvas-project-generation";
 import { generationFailureMetadata } from "@/lib/generation-error";
-import { localDreaminaCancellationCopy, localDreaminaCancellationMessage, localDreaminaDetachOutcome } from "@/services/local-dreamina-task-projection";
 import { runGenerationConsumer } from "@/services/generation-consumer-lifecycle";
 import { consumeCanvasAgentGenerationContinuation } from "./use-canvas-agent-operations";
 
@@ -31,7 +30,6 @@ type UseCanvasGenerationOptions = {
     setNodes: Dispatch<SetStateAction<CanvasNodeData[]>>;
 };
 
-const NODE_STATUS_IDLE = "idle" as const;
 const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
@@ -122,6 +120,7 @@ export async function recoverCanvasGenerationTaskNode(input: {
                                   status: NODE_STATUS_SUCCESS,
                                   errorDetails: undefined,
                                   generationErrorCode: undefined,
+                                  resourceReloadAvailable: undefined,
                                   failedPromptFingerprint: undefined,
                                   storyboard: { rows: result.rows, visibleColumns: cinematicStoryboardColumns(item.metadata?.storyboard?.visibleColumns), referenceNodeIds: item.metadata?.storyboard?.referenceNodeIds || [] },
                               },
@@ -194,7 +193,7 @@ export async function recoverCanvasGenerationTaskNode(input: {
 }
 
 export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded, nodes, nodesRef, setNodes }: UseCanvasGenerationOptions) {
-    const { message, modal } = App.useApp();
+    const { message } = App.useApp();
     const queryClient = useQueryClient();
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
     const recoveringTaskIdsRef = useRef(new Set<string>());
@@ -218,84 +217,6 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
         const request = generationRequestsRef.current.get(targetNodeId);
         if (request?.controller === controller) generationRequestsRef.current.delete(targetNodeId);
     }, []);
-
-    const stopGenerationByRunningId = useCallback(
-        (runningId: string) => {
-            const affectedNodeIds = new Set<string>();
-            generationRequestsRef.current.forEach((request) => {
-                if (request.runningNodeId !== runningId) return;
-                request.controller.abort();
-                generationRequestsRef.current.delete(request.targetNodeId);
-                affectedNodeIds.add(request.targetNodeId);
-                affectedNodeIds.add(request.originNodeId);
-            });
-            setRunningNodeId((current) => (current === runningId ? null : current));
-            if (!affectedNodeIds.size) return;
-            setNodes((current) => current.map((node) => (affectedNodeIds.has(node.id) && node.metadata?.status === NODE_STATUS_LOADING ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_IDLE, errorDetails: undefined } } : node)));
-        },
-        [setNodes],
-    );
-
-    const confirmStopGeneration = useCallback(
-        (nodeId: string) => {
-            modal.confirm({
-                title: "停止生成？",
-                content: "当前生成请求会被中断，已经生成完成的内容会保留。",
-                okText: "停止",
-                cancelText: "继续生成",
-                okButtonProps: { danger: true },
-                onOk: () => stopGenerationByRunningId(nodeId),
-            });
-        },
-        [modal, stopGenerationByRunningId],
-    );
-
-    const cancelNodeTask = useCallback(
-        (node: CanvasNodeData) => {
-            const taskId = node.metadata?.taskId;
-            if (!taskId) {
-                confirmStopGeneration(node.id);
-                return;
-            }
-            const cancellationCopy = localDreaminaCancellationCopy({
-                id: taskId,
-                status: node.metadata?.taskStatus === "queued" ? "queued" : "running",
-                stage: node.metadata?.taskStage,
-                receiptRecorded: node.metadata?.taskReceiptRecorded,
-            });
-            modal.confirm({
-                title: cancellationCopy?.kind === "background" ? "转入后台？" : "取消任务？",
-                content: cancellationCopy?.confirmation || "任务会在后端停止，已生成完成的内容仍会保留。",
-                okText: cancellationCopy?.action || "取消任务",
-                cancelText: "继续生成",
-                okButtonProps: { danger: true },
-                onOk: async () => {
-                    const task = await cancelGenerationTask(taskId);
-                    const outcome = localDreaminaDetachOutcome(task);
-                    const stopMessage = outcome?.message ?? localDreaminaCancellationMessage(task);
-                    if (outcome?.kind !== "background") generationRequestsRef.current.get(node.id)?.controller.abort();
-                    setNodes((current) =>
-                        current.map((item) =>
-                            item.id === node.id
-                                ? {
-                                      ...item,
-                                      metadata: {
-                                          ...item.metadata,
-                                          ...generationTaskMetadata(task),
-                                          status: outcome?.canvasNodeStatus ?? NODE_STATUS_ERROR,
-                                          errorDetails: outcome?.kind === "background" ? undefined : stopMessage,
-                                      },
-                                  }
-                                : item,
-                        ),
-                    );
-                    if (outcome?.kind === "background") message.info(stopMessage);
-                    else message.success(stopMessage);
-                },
-            });
-        },
-        [confirmStopGeneration, message, modal, setNodes],
-    );
 
     const openNodeTaskDetails = useCallback(
         async (node: CanvasNodeData) => {
@@ -341,7 +262,7 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
                             ...node.metadata,
                             ...generationTaskMetadata(task),
                             status: failed ? NODE_STATUS_ERROR : hasCompletedContent ? NODE_STATUS_SUCCESS : NODE_STATUS_LOADING,
-                            ...(failure || { errorDetails: undefined, generationErrorCode: undefined, failedPromptFingerprint: undefined }),
+                            ...(failure || { errorDetails: undefined, generationErrorCode: undefined, resourceReloadAvailable: undefined, failedPromptFingerprint: undefined }),
                         },
                     };
                 }),
@@ -361,30 +282,54 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
 
     const applyGenerationTaskResult = useCallback(
         async (nodeId: string, task: GenerationTask) => {
-            if (!task.outputs?.length && task.type === "canvas_text") {
+            const applyStoredTaskResult = async () => {
                 const applied = await applyGenerationTaskResultToNodes(nodesRef.current, task, nodeId);
                 if (!applied.updated || !applied.node) throw new Error("画布中找不到对应任务节点");
-                setNodes((current) => current.map((node) => (node.id === applied.nodeId ? applied.node! : node)));
+                nodesRef.current = applied.nodes;
+                setNodes(applied.nodes);
+            };
+            if (!task.outputs?.length && task.type === "canvas_text") {
+                await applyStoredTaskResult();
                 return;
             }
-            await consumeGenerationTaskNode(
-                task,
-                nodeId,
-                0,
-                async ({ task: materialized, output, effectKey, signal }) => {
-                    await applyCanvasGenerationTaskNodeEffect({
-                        projectId,
-                        nodeId,
-                        task: materialized,
-                        output,
-                        effectKey,
-                        signal,
-                        nodesRef,
-                        setNodes,
+            try {
+                await consumeGenerationTaskNode(
+                    task,
+                    nodeId,
+                    0,
+                    async ({ task: materialized, output, effectKey, signal }) => {
+                        await applyCanvasGenerationTaskNodeEffect({
+                            projectId,
+                            nodeId,
+                            task: materialized,
+                            output,
+                            effectKey,
+                            signal,
+                            nodesRef,
+                            setNodes,
+                        });
+                    },
+                    { signal: consumerControllerRef.current.signal },
+                );
+                const currentNode = nodesRef.current.find((node) => node.id === nodeId || node.metadata?.taskId === task.id);
+                if (task.status === "succeeded" && (!currentNode?.metadata?.content || currentNode.metadata.status !== NODE_STATUS_SUCCESS)) {
+                    // attach effect 可能已经完成，但旧画布快照仍停留在 loading。
+                    // 最终以节点是否真实拿到媒体结果为准，不能只信幂等记录。
+                    await applyStoredTaskResult();
+                }
+            } catch (error) {
+                // 成功任务的副作用确认失败时，直接用已持久化结果回写节点，避免永久停留在生成中。
+                if (task.status === "succeeded") {
+                    await applyStoredTaskResult().catch(() => {
+                        throw error;
                     });
-                },
-                { signal: consumerControllerRef.current.signal },
-            );
+                } else {
+                    if (generationTaskCanReloadResource(task)) {
+                        setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, resourceReloadAvailable: true } } : node)));
+                    }
+                    throw error;
+                }
+            }
         },
         [nodesRef, projectId, setNodes],
     );
@@ -584,8 +529,6 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
     return {
         applyGenerationTaskResult,
         bindGenerationTask,
-        cancelNodeTask,
-        confirmStopGeneration,
         finishGenerationRequest,
         openNodeTaskDetails,
         runningNodeId,

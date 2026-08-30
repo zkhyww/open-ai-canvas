@@ -1,13 +1,16 @@
 import { NODE_DEFAULT_SIZE, getNodeSpec } from "@/constant/canvas";
-import { STORYBOARD_HEADER_HEIGHT, STORYBOARD_ROW_HEIGHT, storyboardTableHeight } from "@/components/canvas/canvas-script-node";
+import { STORYBOARD_HEADER_HEIGHT, STORYBOARD_ROW_HEIGHT, storyboardTableHeight } from "@/lib/canvas/canvas-storyboard-layout";
+import { normalizeStoryboardAssetBindings } from "@/lib/canvas/canvas-storyboard-assets";
+import { bindingForConnectedNode, storyboardComposerContent, storyboardRowReferenceNodeIds } from "@/lib/canvas/canvas-storyboard-materializer";
 import type { CanvasImageAngleParams } from "@/components/canvas/canvas-node-angle-dialog";
 import type { NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
 import { isFrameNode } from "@/lib/canvas/canvas-frame";
 import { nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
-import { canvasResourceMentionToken, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { canvasNodeMentionToken, canvasResourceMentionToken, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { scopedLocalStorage } from "@/lib/user-scope";
 import type { GenerationTask } from "@/services/api/task-center";
-import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata, type CanvasWorkspaceMode, type ConnectionHandle, type Position, type StoryboardColumn, type StoryboardRow } from "@/types/canvas";
+import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata, type CanvasNodeTypeId, type CanvasWorkspaceMode, type ConnectionHandle, type Position, type StoryboardColumn, type StoryboardRow } from "@/types/canvas";
 
 const CANVAS_WORKSPACE_MODE_STORAGE_KEY = "canvas-workspace-mode-v1";
 
@@ -30,14 +33,20 @@ export function persistCanvasWorkspaceMode(mode: CanvasWorkspaceMode) {
 }
 
 
-export function createCanvasNode(type: CanvasNodeType, position: Position, metadata?: CanvasNodeMetadata): CanvasNodeData {
-    const spec = getNodeSpec(type);
+export function createCanvasNode(type: CanvasNodeTypeId, position: Position, metadata?: CanvasNodeMetadata): CanvasNodeData {
+    const builtinSpec = type in NODE_DEFAULT_SIZE ? getNodeSpec(type as CanvasNodeType) : undefined;
+    const pluginDefinition = getNodeDefinition(type);
+    const spec = builtinSpec || (pluginDefinition ? { width: pluginDefinition.defaultSize.width, height: pluginDefinition.defaultSize.height, title: pluginDefinition.defaultTitle, metadata: pluginDefinition.defaultMetadata } : undefined);
+    if (!spec) throw new Error(`未注册的画布节点类型：${type}`);
     const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const now = new Date().toISOString();
 
     return {
         id,
         type,
         title: spec.title,
+        createdAt: now,
+        updatedAt: now,
         position: {
             x: position.x - spec.width / 2,
             y: position.y - spec.height / 2,
@@ -45,7 +54,7 @@ export function createCanvasNode(type: CanvasNodeType, position: Position, metad
         width: spec.width,
         height: spec.height,
         metadata: type === CanvasNodeType.Script
-            ? { ...spec.metadata, ...metadata, storyboard: metadata?.storyboard || { rows: [1, 2, 3].map((shotNumber) => createStoryboardRow(shotNumber)), visibleColumns: ["shotNumber", "durationSeconds", "plotDescription", "dialogue"], referenceNodeIds: [] } }
+            ? { ...spec.metadata, ...metadata, storyboard: metadata?.storyboard || { rows: [1, 2, 3].map((shotNumber) => createStoryboardRow(shotNumber)), visibleColumns: ["shotNumber", "durationSeconds", "videoMotionPrompt", "dialogue", "assets"], referenceNodeIds: [] } }
             : { ...spec.metadata, ...metadata, ...(type === CanvasNodeType.Drawing ? { drawingId: metadata?.drawingId || `${id}-document` } : {}) },
     };
 }
@@ -74,7 +83,7 @@ export function createStoryboardRow(shotNumber: number, patch: Partial<Storyboar
         optionalDetails: [],
         continuityOut: "",
         negativePrompt: "",
-        referenceNodeIds: [],
+        assetBindings: [],
         status: "idle",
         ...patch,
     };
@@ -90,7 +99,12 @@ export function storyboardPromptTemplateMetadata(row: StoryboardRow, kind: "imag
 
 export function cinematicStoryboardColumns(columns?: StoryboardColumn[]): StoryboardColumn[] {
     return Array.from(new Set([
-        ...(columns || ["shotNumber", "durationSeconds", "plotDescription", "dialogue"]),
+        "shotNumber",
+        "durationSeconds",
+        "videoMotionPrompt",
+        "dialogue",
+        "assets",
+        ...(columns || []),
         "shotSize",
         "narrativeIntent",
         "viewerPOV",
@@ -115,7 +129,7 @@ export function storyboardRowsFromTask(task: GenerationTask) {
                 id: `shot-${Date.now()}-${index + 1}-${Math.random().toString(36).slice(2, 6)}`,
                 shotNumber: index + 1,
                 status: "idle",
-                referenceNodeIds: Array.isArray(row.referenceNodeIds) ? row.referenceNodeIds : [],
+                assetBindings: normalizeStoryboardAssetBindings(row.assetBindings),
             });
             next.characters = Array.isArray(row.characters) ? row.characters : [];
             next.mustHave = Array.isArray(row.mustHave) ? row.mustHave : [];
@@ -126,23 +140,54 @@ export function storyboardRowsFromTask(task: GenerationTask) {
 }
 
 
+// 模型切换时必须清理的节点级生成参数：这些参数属于旧模型的能力档位（分辨率/宽高比/质量等），
+// 新模型不支持时若残留，会在 buildNodeConfig 的「节点优先、全局兜底」合并中反复叠加（issue #254）。
+const NODE_MODEL_GENERATION_PARAMS: ReadonlyArray<keyof CanvasNodeMetadata> = [
+    "size",
+    "quality",
+    "transparentBackground",
+    "count",
+    "seconds",
+    "vquality",
+    "generateAudio",
+    "watermark",
+    "audioVoice",
+    "audioFormat",
+    "audioSpeed",
+    "audioInstructions",
+];
+
 export function applyNodeConfigPatch(node: CanvasNodeData, patch: Partial<CanvasNodeMetadata>) {
     const safePatch = patch || {};
-    const next = { ...node, metadata: { ...node.metadata, ...safePatch } };
+    const nextPatch = resetGenerationParamsOnModelSwitch(node, safePatch);
+    const next = { ...node, metadata: { ...node.metadata, ...nextPatch } };
     const spec = node.type === CanvasNodeType.Video ? NODE_DEFAULT_SIZE[CanvasNodeType.Video] : NODE_DEFAULT_SIZE[CanvasNodeType.Image];
     const size = typeof safePatch.size === "string" && !node.metadata?.content ? nodeSizeFromRatio(safePatch.size, spec.width, spec.height) : null;
     return size && (node.type === CanvasNodeType.Image || node.type === CanvasNodeType.Video) ? { ...next, ...size, position: { x: node.position.x + node.width / 2 - size.width / 2, y: node.position.y + node.height / 2 - size.height / 2 } } : next;
 }
 
-export function getConnectionTargetAnchor(node: CanvasNodeData, current: ConnectionHandle, handleId?: string, scrollTop = 0, anchorRatio?: number) {
-    return {
-        x: current.handleType === "source" ? node.position.x : node.position.x + node.width,
-        y: storyboardHandleY(node, handleId, scrollTop) ?? node.position.y + node.height * normalizeAnchorRatio(anchorRatio),
-    };
+// 切换模型（不同模型标识）时，节点级生成参数必须随旧模型一起失效，回落全局配置；
+// 显式传入的同批 patch（如用户同时调整了参数）仍然优先。
+function resetGenerationParamsOnModelSwitch(node: CanvasNodeData, patch: Partial<CanvasNodeMetadata>): Partial<CanvasNodeMetadata> {
+    if (typeof patch.model !== "string" || patch.model === node.metadata?.model) {
+        return patch;
+    }
+    const reset: Partial<CanvasNodeMetadata> = {};
+    for (const key of NODE_MODEL_GENERATION_PARAMS) {
+        reset[key] = undefined;
+    }
+    return { ...reset, ...patch };
 }
 
-function normalizeAnchorRatio(value?: number) {
-    return typeof value === "number" && Number.isFinite(value) ? clamp(value, 0.06, 0.94) : 0.5;
+/**
+ * 连线落到目标节点上的吸附点。单端口一侧取边的正中——与 connectionHandleY 保持同一个
+ * 口径，否则吸附点和实际画出来的线会对不上（这两处是同一规则的两份实现，改一处必错）。
+ */
+export function getConnectionTargetAnchor(node: CanvasNodeData, current: ConnectionHandle, handleId?: string, scrollTop = 0) {
+    return {
+        x: current.handleType === "source" ? node.position.x : node.position.x + node.width,
+        y: storyboardHandleY(node, handleId, scrollTop) ?? node.position.y + node.height / 2,
+    };
 }
 
 export function storyboardHandleAtY(node: CanvasNodeData, worldY: number, scrollTop = 0) {
@@ -194,13 +239,15 @@ export function attachNodeToStoryboardRow(nodes: CanvasNodeData[], connection: P
     if (!scriptNodeId || !linkedNode || !scriptNode) return nodes;
     const row = rowId ? scriptNode.metadata?.storyboard?.rows.find((item) => item.id === rowId) : undefined;
     const videoPrompt = row ? (row.videoMotionPrompt || row.plotDescription).trim() : "";
+    const videoComposerContent = row ? storyboardComposerContent(videoPrompt, storyboardRowReferenceNodeIds(scriptNode, row, nodes, [], false), nodes) : "";
 
     return nodes.map((node) => {
         if (row && node.id === linkedNode.id && scriptNodeId === connection.fromNodeId && node.type === CanvasNodeType.Video) {
-            return { ...node, title: `镜头 ${row.shotNumber} · 视频`, metadata: { ...node.metadata, prompt: videoPrompt, composerContent: videoPrompt, ...storyboardPromptTemplateMetadata(row, "video"), workflowKind: "shot" as const, workflowTitle: `镜头 ${row.shotNumber} 视频`, shotIndex: row.shotNumber, generationMode: "video" as const, videoEditOperation: node.metadata?.videoEditOperation || "text_to_video", seconds: String(row.durationSeconds) } };
+            return { ...node, title: `镜头 ${row.shotNumber} · 视频`, metadata: { ...node.metadata, prompt: videoPrompt, composerContent: videoComposerContent, ...storyboardPromptTemplateMetadata(row, "video"), workflowKind: "shot" as const, workflowTitle: `镜头 ${row.shotNumber} 视频`, shotIndex: row.shotNumber, generationMode: "video" as const, videoEditOperation: node.metadata?.videoEditOperation || "text_to_video", seconds: String(row.durationSeconds) } };
         }
         if (node.id !== scriptNodeId || node.type !== CanvasNodeType.Script) return node;
         const storyboard = node.metadata?.storyboard;
+        const binding = bindingForConnectedNode(linkedNode);
         return {
             ...node,
             metadata: {
@@ -208,8 +255,10 @@ export function attachNodeToStoryboardRow(nodes: CanvasNodeData[], connection: P
                 storyboard: {
                     rows: (storyboard?.rows || []).map((item) => item.id !== rowId ? item : scriptNodeId === connection.fromNodeId
                         ? { ...item, imageNodeId: linkedNode.type === CanvasNodeType.Image ? linkedNode.id : item.imageNodeId, videoNodeId: linkedNode.type === CanvasNodeType.Video ? linkedNode.id : item.videoNodeId }
-                        : { ...item, referenceNodeIds: Array.from(new Set([...(item.referenceNodeIds || []), linkedNode.id])) }),
-                    visibleColumns: storyboard?.visibleColumns || ["shotNumber", "durationSeconds", "plotDescription", "dialogue"],
+                        : binding && !(item.assetBindings || []).some((candidate) => candidate.nodeId === linkedNode.id)
+                          ? { ...item, assetBindings: [...(item.assetBindings || []), binding] }
+                          : item),
+                    visibleColumns: storyboard?.visibleColumns || ["shotNumber", "durationSeconds", "videoMotionPrompt", "dialogue", "assets"],
                     referenceNodeIds: handleId === "storyboard:context" ? Array.from(new Set([...(storyboard?.referenceNodeIds || []), linkedNode.id])) : storyboard?.referenceNodeIds || [],
                 },
             },
@@ -226,7 +275,8 @@ export function expandStoryboardTextMentions(prompt: string, references: CanvasR
     let expanded = prompt;
     references.filter((reference) => reference.active && reference.kind === "text" && reference.text?.trim()).forEach((reference) => {
         const replacement = `【项目设定：${reference.title}】\n${reference.text!.trim()}`;
-        for (const token of [canvasResourceMentionToken(reference), `@${reference.label}`]) {
+        for (const token of [canvasResourceMentionToken(reference), `@${reference.label}`, reference.nodeId ? canvasNodeMentionToken(reference.nodeId) : ""]) {
+            if (!token) continue;
             if (expanded.includes(token)) expanded = expanded.split(token).join(replacement);
         }
     });
@@ -371,7 +421,7 @@ export function removeCanvasNodes(nodes: CanvasNodeData[], requestedIds: Set<str
                           referenceNodeIds: storyboard.referenceNodeIds.filter((id) => !removedIds.has(id)),
                           rows: storyboard.rows.map((row) => ({
                               ...row,
-                              referenceNodeIds: (row.referenceNodeIds || []).filter((id) => !removedIds.has(id)),
+                              assetBindings: (row.assetBindings || []).filter((binding) => !removedIds.has(binding.nodeId)),
                               imageNodeId: row.imageNodeId && !removedIds.has(row.imageNodeId) ? row.imageNodeId : undefined,
                               videoNodeId: row.videoNodeId && !removedIds.has(row.videoNodeId) ? row.videoNodeId : undefined,
                           })),

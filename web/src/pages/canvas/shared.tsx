@@ -14,7 +14,7 @@ import { FullScreenLoader } from "@/components/ui/aceternity/full-screen-loader"
 import { WorkspaceState } from "@/components/layout/workspace-state";
 import { NODE_DEFAULT_SIZE } from "@/constant/canvas";
 import { canvasThemes } from "@/lib/canvas-theme";
-import { isFrameNode, isNodeHiddenByCollapsedFrame, resolveFrameConnection } from "@/lib/canvas/canvas-frame";
+import { FOLDER_COLLAPSED_HEIGHT, FOLDER_COLLAPSED_WIDTH, isCanvasFolderNode, isFrameNode, isNodeHiddenByCollapsedFrame, resolveFrameConnection } from "@/lib/canvas/canvas-frame";
 import { ensureMediaNodeMinimumSize } from "@/lib/canvas/canvas-node-size";
 import { getPublicCanvasShare } from "@/services/api/canvas-share";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -34,7 +34,7 @@ export default function SharedCanvasPage() {
     const [title, setTitle] = useState("共享画布");
     const [nodes, setNodes] = useState<CanvasNodeData[]>([]);
     const [connections, setConnections] = useState<Awaited<ReturnType<typeof getPublicCanvasShare>>["project"]["connections"]>([]);
-    const [backgroundMode, setBackgroundMode] = useState<"lines" | "dots" | "blank">("dots");
+    const [backgroundMode, setBackgroundMode] = useState<"lines" | "dots" | "blank">("lines");
     const [viewport, setViewport] = useState<ViewportTransform>({ x: 0, y: 0, k: 1 });
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
     const [infoNodeId, setInfoNodeId] = useState<string | null>(null);
@@ -80,7 +80,7 @@ export default function SharedCanvasPage() {
             setTitle(project.title || "共享画布");
             setNodes((project.nodes || []).map(ensureMediaNodeMinimumSize));
             setConnections(project.connections || []);
-            setBackgroundMode(project.backgroundMode || "dots");
+            setBackgroundMode(project.backgroundMode || "lines");
             const initial = project.viewport || { x: 0, y: 0, k: 1 };
             viewportRef.current = initial;
             setViewport(initial);
@@ -209,8 +209,8 @@ export default function SharedCanvasPage() {
         const frame = node.metadata?.frame;
         return {
             ...node,
-            width: collapsed ? 240 : frame?.expandedWidth || node.width,
-            height: collapsed ? 144 : frame?.expandedHeight || node.height,
+            width: collapsed ? (isCanvasFolderNode(node) ? FOLDER_COLLAPSED_WIDTH : 240) : frame?.expandedWidth || node.width,
+            height: collapsed ? (isCanvasFolderNode(node) ? FOLDER_COLLAPSED_HEIGHT : 144) : frame?.expandedHeight || node.height,
             metadata: { ...node.metadata, frame: { collapsed, expandedWidth: collapsed ? node.width : frame?.expandedWidth || node.width, expandedHeight: collapsed ? node.height : frame?.expandedHeight || node.height } },
         };
     }));
@@ -244,7 +244,7 @@ export default function SharedCanvasPage() {
                     const dragged = [node, ...(frameChildrenById.get(nodeId) || [])];
                     dragRef.current = { primaryId: nodeId, nodeIds: dragged.map((item) => item.id), startX: event.clientX, startY: event.clientY, origins: new Map(dragged.map((item) => [item.id, item.position])), moved: false };
                     document.body.style.cursor = "grabbing";
-                }} onResize={() => undefined} onToggleCollapsed={toggleFrame} onTitleChange={unauthorized} onHoverStart={keepToolbar} onHoverEnd={hideToolbar} onContextMenu={(event, nodeId) => openContextMenu(event, nodeId)} /> : <CanvasNode key={node.id} data={node} dragOffset={dragRef.current?.nodeIds.includes(node.id) && dragOffset ? dragOffset : undefined} scale={viewport.k} isSelected={selectedNodeId === node.id} isRelated={false} isFocusRelated={false} isConnectionTarget={false} isConnecting={false} showImageInfo={false} readOnly renderNodeContent={renderSharedNode} onMouseDown={(event, nodeId) => {
+                }} onResize={() => undefined} onToggleCollapsed={toggleFrame} onFolderStyleChange={() => undefined} onTitleChange={unauthorized} onHoverStart={keepToolbar} onHoverEnd={hideToolbar} onContextMenu={(event, nodeId) => openContextMenu(event, nodeId)} /> : <CanvasNode key={node.id} data={node} dragOffset={dragRef.current?.nodeIds.includes(node.id) && dragOffset ? dragOffset : undefined} scale={viewport.k} isSelected={selectedNodeId === node.id} isRelated={false} isFocusRelated={false} isConnectionTarget={false} showImageInfo={false} readOnly renderNodeContent={renderSharedNode} onMouseDown={(event, nodeId) => {
                     event.stopPropagation();
                     if (event.button !== 0) return;
                     const target = nodes.find((item) => item.id === nodeId);
@@ -253,12 +253,12 @@ export default function SharedCanvasPage() {
                     setContextMenu(null);
                     dragRef.current = { primaryId: nodeId, nodeIds: [nodeId], startX: event.clientX, startY: event.clientY, origins: new Map([[nodeId, target.position]]), moved: false };
                     document.body.style.cursor = "grabbing";
-                }} onHoverStart={keepToolbar} onHoverEnd={hideToolbar} onConnectStart={unauthorized} onResize={() => undefined} onContentChange={unauthorized} onRetry={unauthorized} onCancelTask={unauthorized} onOpenTaskDetails={unauthorized} onViewImage={(target) => setInfoNodeId(target.id)} onContextMenu={(event, nodeId) => openContextMenu(event, nodeId)} />)}
+                }} onHoverStart={keepToolbar} onHoverEnd={hideToolbar} onConnectStart={unauthorized} onResize={() => undefined} onContentChange={unauthorized} onRetry={unauthorized} onOpenTaskDetails={unauthorized} onViewImage={(target) => setInfoNodeId(target.id)} onContextMenu={(event, nodeId) => openContextMenu(event, nodeId)} />)}
             </InfiniteCanvas>
 
-            <CanvasNodeToolbar node={dragRef.current ? null : toolbarNode} viewport={viewport} containerRef={containerRef} onKeep={keepToolbar} onLeave={hideToolbar} onInfo={(node) => setInfoNodeId(node.id)} onEditText={unauthorized} onDecreaseFont={unauthorized} onIncreaseFont={unauthorized} onToggleDialog={unauthorized} onAnnotate={unauthorized} onGenerateImage={unauthorized} onUpload={unauthorized} onDownload={unauthorized} onSaveAsset={unauthorized} onMaskEdit={unauthorized} onEmotion={unauthorized} onPortraitTexture={unauthorized} onCrop={unauthorized} onSplit={unauthorized} onUpscale={unauthorized} onSuperResolve={unauthorized} onAngle={unauthorized} onViewImage={unauthorized} onExtractVideoLastFrame={unauthorized} onExtractAudioFromVideo={unauthorized} onTrimVideoRegenerate={unauthorized} extractingVideoFrame={false} extractingAudio={false} trimmingVideo={false} onSubtitles={unauthorized} onTimeline={unauthorized} onReversePrompt={unauthorized} onRetry={unauthorized} onToggleFreeResize={unauthorized} onToggleLocked={unauthorized} onDelete={unauthorized} />
+            <CanvasNodeToolbar node={dragRef.current ? null : toolbarNode} viewport={viewport} containerRef={containerRef} onKeep={keepToolbar} onLeave={hideToolbar} onInfo={(node) => setInfoNodeId(node.id)} onEditText={unauthorized} onDecreaseFont={unauthorized} onIncreaseFont={unauthorized} onToggleDialog={unauthorized} onAnnotate={unauthorized} onGenerateImage={unauthorized} onUpload={unauthorized} onDownload={unauthorized} onSaveAsset={unauthorized} onMaskEdit={unauthorized} onEmotion={unauthorized} onPortraitTexture={unauthorized} onCrop={unauthorized} onSplit={unauthorized} onUpscale={unauthorized} onSuperResolve={unauthorized} onAngle={unauthorized} onViewImage={unauthorized} onExtractVideoFrames={unauthorized} onExtractAudioFromVideo={unauthorized} onTrimVideoSegments={unauthorized} extractingVideoFrames={false} extractingAudio={false} trimmingVideo={false} onSubtitles={unauthorized} onTimeline={unauthorized} onReversePrompt={unauthorized} onRetry={unauthorized} onToggleFreeResize={unauthorized} onToggleLocked={unauthorized} onDelete={unauthorized} />
 
-            <div className="absolute bottom-5 left-5 z-[var(--z-panel-floating)]"><CanvasZoomControls scale={viewport.k} containerRef={containerRef} onScaleChange={setZoom} onReset={resetViewport} isMiniMapOpen={false} onToggleMiniMap={unauthorized} onOpenShortcuts={unauthorized} /></div>
+            <div className="absolute bottom-5 left-5 z-[var(--z-panel-floating)]"><CanvasZoomControls scale={viewport.k} containerRef={containerRef} onScaleChange={setZoom} onFitContent={resetViewport} isMiniMapOpen={false} onToggleMiniMap={unauthorized} onOpenShortcuts={unauthorized} /></div>
             <div className="pointer-events-none absolute bottom-5 right-5 z-[var(--z-panel-floating)] max-w-[340px] text-right text-xs leading-5" style={{ color: theme.node.muted }}>访客操作仅在当前页面临时生效</div>
 
             {contextMenu ? <SharedContextMenu menu={contextMenu} onAdd={addNode} onInfo={() => { if (contextMenu.nodeId) setInfoNodeId(contextMenu.nodeId); setContextMenu(null); }} onUnauthorized={() => { setContextMenu(null); unauthorized(); }} /> : null}

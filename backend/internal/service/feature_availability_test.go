@@ -5,20 +5,21 @@ import (
 	"testing"
 
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/protocol"
 	"infinite-canvas/backend/internal/repository"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
-func TestFeatureAvailabilityDefaultsToEnabled(t *testing.T) {
+func TestFeatureAvailabilityDefaultsToDisableFrontendModels(t *testing.T) {
 	svc, _ := newFeatureAvailabilityTestService(t)
 
 	setting, err := svc.FeatureAvailability()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if setting.Configured || !setting.ShortDramaEnabled || !setting.TaskCenterEnabled || !setting.CreditsEnabled || !setting.CustomChannelsEnabled {
+	if setting.Configured || !setting.ShortDramaEnabled || !setting.TaskCenterEnabled || !setting.CreditsEnabled || !setting.CustomChannelsEnabled || setting.FrontendModelsEnabled || !setting.PluginCenterEnabled || !setting.SystemPluginsVisibleToUsers {
 		t.Fatalf("FeatureAvailability() = %#v", setting)
 	}
 }
@@ -34,7 +35,7 @@ func TestFeatureAvailabilityLegacySettingKeepsCustomChannelsEnabled(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if setting.ShortDramaEnabled || !setting.CustomChannelsEnabled {
+	if setting.ShortDramaEnabled || !setting.CustomChannelsEnabled || setting.FrontendModelsEnabled || !setting.PluginCenterEnabled || !setting.SystemPluginsVisibleToUsers {
 		t.Fatalf("FeatureAvailability() = %#v", setting)
 	}
 }
@@ -42,14 +43,17 @@ func TestFeatureAvailabilityLegacySettingKeepsCustomChannelsEnabled(t *testing.T
 func TestUpdateFeatureAvailabilityPersistsAndAudits(t *testing.T) {
 	svc, db := newFeatureAvailabilityTestService(t)
 	actor := &model.User{ID: "admin-1", Role: model.UserRoleAdmin}
-	want := FeatureAvailability{ShortDramaEnabled: false, TaskCenterEnabled: true, CreditsEnabled: false, CustomChannelsEnabled: true}
+	want := FeatureAvailability{ShortDramaEnabled: false, TaskCenterEnabled: true, CreditsEnabled: false, CustomChannelsEnabled: true, PluginCenterEnabled: false, SystemPluginsVisibleToUsers: false}
 
 	setting, err := svc.UpdateFeatureAvailability(actor, want)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !setting.Configured || setting.ShortDramaEnabled || !setting.TaskCenterEnabled || setting.CreditsEnabled || !setting.CustomChannelsEnabled {
+	if !setting.Configured || setting.ShortDramaEnabled || !setting.TaskCenterEnabled || setting.CreditsEnabled || !setting.CustomChannelsEnabled || setting.PluginCenterEnabled || setting.SystemPluginsVisibleToUsers {
 		t.Fatalf("UpdateFeatureAvailability() = %#v", setting)
+	}
+	if enabled, err := svc.FeatureEnabled(FeaturePluginCenter); err != nil || enabled {
+		t.Fatalf("FeatureEnabled(pluginCenter) = %v, %v", enabled, err)
 	}
 	if err := svc.RequireFeature(FeatureShortDrama); err == nil {
 		t.Fatal("RequireFeature(shortDrama) error = nil")
@@ -65,6 +69,37 @@ func TestUpdateFeatureAvailabilityPersistsAndAudits(t *testing.T) {
 	}
 	if auditCount != 1 {
 		t.Fatalf("audit count = %d, want 1", auditCount)
+	}
+}
+
+func TestPluginsForUserKeepsOfficialApplicationsAndHidesManagedPlugins(t *testing.T) {
+	svc, _ := newFeatureAvailabilityTestService(t)
+	admin := &model.User{ID: "admin-1", Role: model.UserRoleAdmin}
+	if _, err := svc.UpdateFeatureAvailability(admin, FeatureAvailability{
+		ShortDramaEnabled: true, TaskCenterEnabled: true, CreditsEnabled: true,
+		CustomChannelsEnabled: true, PluginCenterEnabled: true, SystemPluginsVisibleToUsers: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc.pluginRuntime = &pluginRuntime{plugins: map[string]pluginRecord{
+		"bundled":  {Source: "bundled", Metadata: protocol.Metadata{ID: "bundled", Name: "系统协议", Version: "1"}},
+		"uploaded": {Source: "uploaded", Metadata: protocol.Metadata{ID: "uploaded", Name: "自定义协议", Version: "1"}},
+		"app":      {Source: "bundled", Metadata: protocol.Metadata{ID: WorkflowPluginRunningHub, Name: "官方应用", Version: "1"}},
+	}}
+
+	visibleToUser, err := svc.PluginsForUser(&model.User{ID: "user-1", Role: model.UserRoleUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(visibleToUser) != 1 || visibleToUser[0].Manifest.ID != WorkflowPluginRunningHub {
+		t.Fatalf("PluginsForUser(user) = %#v", visibleToUser)
+	}
+	visibleToAdmin, err := svc.PluginsForUser(admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(visibleToAdmin) != 3 {
+		t.Fatalf("PluginsForUser(admin) = %#v", visibleToAdmin)
 	}
 }
 
@@ -95,6 +130,30 @@ func TestCustomChannelTaskInputRequiresFeature(t *testing.T) {
 	}
 	if err := svc.requireCustomChannelsForTaskInput(legacySystemInput); err != nil {
 		t.Fatalf("legacy system proxy task error = %v", err)
+	}
+}
+
+func TestCreateTaskDoesNotClassifyCustomChannelAsMissingSystemModel(t *testing.T) {
+	svc, _ := newFeatureAvailabilityTestService(t)
+	actor := &model.User{ID: "admin-1", Role: model.UserRoleAdmin}
+	if _, err := svc.UpdateFeatureAvailability(actor, FeatureAvailability{ShortDramaEnabled: true, TaskCenterEnabled: true, CreditsEnabled: true, CustomChannelsEnabled: false, FrontendModelsEnabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := svc.CreateTask("user-1", CreateTaskRequest{
+		Type:   "canvas_text",
+		Prompt: "test custom channel",
+		Input: map[string]any{
+			"mode":   "text",
+			"config": providerConfig{BaseURL: "https://example.com/v1", APIKey: "private-key", Model: "text-model"},
+		},
+	})
+	if err == nil {
+		t.Fatal("CreateTask() error = nil")
+	}
+	var authErr *AuthError
+	if !errors.As(err, &authErr) || authErr.Message != "自定义渠道暂未开放" {
+		t.Fatalf("CreateTask() error = %#v, want custom channel feature error", err)
 	}
 }
 

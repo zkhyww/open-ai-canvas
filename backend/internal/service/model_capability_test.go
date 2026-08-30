@@ -83,6 +83,112 @@ func TestDefaultVideoCapabilityUsesProtocolSpecificResolutionTiers(t *testing.T)
 	}
 }
 
+func TestDefaultMiniMaxVideoCapabilitySupportsReferenceGeneration(t *testing.T) {
+	profile := DefaultModelCapabilityConfigForModel("minimax-video", "MiniMax-H3")
+	if profile == nil || profile.Video == nil {
+		t.Fatal("MiniMax video profile = nil")
+	}
+	if !containsCapabilityString(profile.Video.Operations, "reference_to_video") {
+		t.Fatalf("operations = %v, want reference_to_video", profile.Video.Operations)
+	}
+}
+
+func TestAgnesVideo25CapabilityUsesOfficialLimits(t *testing.T) {
+	standard := DefaultModelCapabilityConfigForModel("agnes-video", "agnes-video-2.5").Video
+	if standard.Duration.Min != 4 || standard.Duration.Max != 12 || standard.Duration.Default != 5 {
+		t.Fatalf("Agnes 2.5 duration = %#v", standard.Duration)
+	}
+	if fmt.Sprint(standard.Resolutions) != fmt.Sprint([]string{"720P", "960P", "2K"}) || standard.References.MaxVideos != 3 {
+		t.Fatalf("Agnes 2.5 capability = %#v", standard)
+	}
+	flash := DefaultModelCapabilityConfigForModel("agnes-video", "agnes-video-2.5-flash").Video
+	if fmt.Sprint(flash.Resolutions) != fmt.Sprint([]string{"720P"}) || flash.References.MaxImages != 5 || flash.References.MaxVideos != 0 {
+		t.Fatalf("Agnes 2.5 Flash capability = %#v", flash)
+	}
+}
+
+func TestNormalizeAgnesVideo25CapabilityRepairsLegacyStoredLimits(t *testing.T) {
+	legacy := DefaultModelCapabilityConfigForModel("newapi", "legacy-video")
+	normalized, err := NormalizeModelCapabilityConfigForModel("video", "agnes-video", "agnes-video-2.5", legacy)
+	if err != nil {
+		t.Fatalf("NormalizeModelCapabilityConfigForModel() error = %v", err)
+	}
+	if normalized.Video.Duration.Min != 4 || normalized.Video.Duration.Max != 12 || normalized.Video.Duration.Default != 5 {
+		t.Fatalf("normalized duration = %#v", normalized.Video.Duration)
+	}
+	if fmt.Sprint(normalized.Video.Resolutions) != fmt.Sprint([]string{"720P", "960P", "2K"}) {
+		t.Fatalf("normalized resolutions = %v", normalized.Video.Resolutions)
+	}
+	input := canvasGenerationInput{Config: providerConfig{InterfaceType: "agnes-video", Model: "agnes-video-2.5", VideoSeconds: "15", Size: "16:9", VQuality: "720P"}}
+	if err := validateVideoTask(normalized.Video, input); err == nil {
+		t.Fatalf("validateVideoTask(15 seconds) error = %v", err)
+	}
+}
+
+func TestDefaultVolcengineArkVideoCapabilitySupportsFullModalReference(t *testing.T) {
+	profile := DefaultModelCapabilityConfigForModel("volcengine-ark-video", "doubao-seedance-2-0-260128")
+	if profile == nil || profile.Video == nil {
+		t.Fatal("Volcengine Ark video profile = nil")
+	}
+	for _, operation := range []string{"reference_to_video", "audio_to_video"} {
+		if !containsCapabilityString(profile.Video.Operations, operation) {
+			t.Fatalf("operations = %v, want %s", profile.Video.Operations, operation)
+		}
+	}
+	if profile.Video.References.MaxImages != 9 || profile.Video.References.MaxVideos != 3 || profile.Video.References.MaxAudios != 3 {
+		t.Fatalf("reference limits = %#v", profile.Video.References)
+	}
+}
+
+func TestValidateVolcengineArkFullModalReferenceRejectsTextAndAudioOnly(t *testing.T) {
+	profile := DefaultModelCapabilityConfigForModel("volcengine-ark-video", "doubao-seedance-2-0-260128").Video
+	input := canvasGenerationInput{
+		Prompt:          "follow the soundtrack",
+		Config:          providerConfig{InterfaceType: "volcengine-ark-video", VideoSeconds: "6", Size: "16:9", VQuality: "720p"},
+		ReferenceAudios: []providerMedia{{URL: "https://example.com/music.mp3"}},
+		Metadata:        map[string]interface{}{"videoEditOperation": "audio_to_video"},
+	}
+	err := validateVideoTask(profile, input)
+	if err == nil || !strings.Contains(err.Error(), "文本+音频") {
+		t.Fatalf("validateVideoTask() error = %v", err)
+	}
+
+	input.ReferenceImages = []providerMedia{{URL: "https://example.com/subject.png"}}
+	if err := validateVideoTask(profile, input); err != nil {
+		t.Fatalf("validateVideoTask(full modal) error = %v", err)
+	}
+}
+
+func TestCapabilitySpecFromModelCapabilityConfigRestoresLegacyWildcardImageSizes(t *testing.T) {
+	config := &ModelCapabilityConfig{
+		Version: 1,
+		Image: &ImageCapabilityConfig{
+			Size: ImageSizeConfig{Parameter: "size", Values: []string{"*"}, AllowCustom: true},
+		},
+	}
+
+	spec, err := CapabilitySpecFromModelCapabilityConfig(config, "image")
+	if err != nil {
+		t.Fatalf("CapabilitySpecFromModelCapabilityConfig() error = %v", err)
+	}
+	constraint, ok := spec.Options["size"]
+	if !ok {
+		t.Fatal("size constraint is missing")
+	}
+	values := make(map[string]int)
+	for _, value := range constraint.Values {
+		values[fmt.Sprint(value)]++
+	}
+	for _, value := range legacyImageSizeValues() {
+		if values[value] != 1 {
+			t.Fatalf("size constraint missing %q: %v", value, constraint.Values)
+		}
+	}
+	if values["*"] != 1 {
+		t.Fatalf("size constraint wildcard count = %d, values = %v", values["*"], constraint.Values)
+	}
+}
+
 func TestNormalizeResolutionSupportsCommonAliases(t *testing.T) {
 	tests := map[string]string{
 		"1440":  "1440p",
@@ -128,6 +234,78 @@ func TestNormalizeVideoCapabilityAllowsOmittedResolution(t *testing.T) {
 	}
 	if result.Video == nil || len(result.Video.Resolutions) != 0 || result.Video.DefaultResolution != "" {
 		t.Fatalf("normalized video resolution = %#v", result.Video)
+	}
+}
+
+func TestNormalizeVideoCapabilityAllowsOmittedRatio(t *testing.T) {
+	profile := DefaultModelCapabilityConfigForModel("autodl-comfyui", "minimax_h3_lightx2v_no_pic").Video
+	profile.Ratios = nil
+	profile.DefaultRatio = ""
+	profile.Resolutions = []string{"480p竖", "480p横"}
+	profile.DefaultResolution = "480p竖"
+
+	result, err := NormalizeModelCapabilityConfig("video", "autodl-comfyui", &ModelCapabilityConfig{Version: 1, Video: profile})
+	if err != nil {
+		t.Fatalf("NormalizeModelCapabilityConfig() error = %v", err)
+	}
+	if result.Video == nil || len(result.Video.Ratios) != 0 || result.Video.DefaultRatio != "" {
+		t.Fatalf("normalized video ratios = %#v", result.Video)
+	}
+	if err := validateVideoTask(result.Video, canvasGenerationInput{Config: providerConfig{Model: "minimax_h3_lightx2v_no_pic", VideoSeconds: "6", VQuality: "480p竖"}}); err != nil {
+		t.Fatalf("validateVideoTask() error = %v", err)
+	}
+}
+
+func TestCapabilitySpecFromModelCapabilityConfigProjectsImageSizeOnce(t *testing.T) {
+	config := &ModelCapabilityConfig{
+		Version: 1,
+		Image: &ImageCapabilityConfig{
+			References: ImageReferenceConfig{MaxImages: 3, MaskSupported: false},
+			Size:       ImageSizeConfig{Parameter: "size", Values: []string{"1:1", "16:9"}, AllowCustom: true},
+			MaxOutputs: 4,
+		},
+	}
+
+	spec, err := CapabilitySpecFromModelCapabilityConfig(config, "image")
+	if err != nil {
+		t.Fatalf("CapabilitySpecFromModelCapabilityConfig() error = %v", err)
+	}
+	if got := spec.Options["size"].Values; len(got) != 3 || got[0] != "1:1" || got[1] != "16:9" || got[2] != "*" {
+		t.Fatalf("size projection = %#v, want configured values plus wildcard", got)
+	}
+	if got := spec.Inputs["image"].Max; got != 3 {
+		t.Fatalf("image input max = %d, want 3", got)
+	}
+	if got := spec.Options["count"].Max; got == nil || *got != 4 {
+		t.Fatalf("count max = %v, want 4", got)
+	}
+}
+
+func TestCapabilitySpecFromModelCapabilityConfigProjectsCustomImageSizeAsWildcard(t *testing.T) {
+	config := &ModelCapabilityConfig{
+		Version: 1,
+		Image: &ImageCapabilityConfig{
+			Size:       ImageSizeConfig{Parameter: "size", Values: []string{"1:1"}, AllowCustom: true},
+			MaxOutputs: 1,
+		},
+	}
+
+	spec, err := CapabilitySpecFromModelCapabilityConfig(config, "image")
+	if err != nil {
+		t.Fatalf("CapabilitySpecFromModelCapabilityConfig() error = %v", err)
+	}
+	if got := spec.Options["size"].Values; len(got) != 2 || got[0] != "1:1" || got[1] != "*" {
+		t.Fatalf("custom size projection = %#v, want configured value plus wildcard", got)
+	}
+}
+
+func TestCapabilitySpecFromModelCapabilityConfigAllowsAudioWithoutConfig(t *testing.T) {
+	spec, err := CapabilitySpecFromModelCapabilityConfig(nil, "audio")
+	if err != nil {
+		t.Fatalf("audio projection error = %v", err)
+	}
+	if spec.Capability != "audio" || len(spec.Inputs) != 0 || len(spec.Options) != 0 {
+		t.Fatalf("audio projection = %#v", spec)
 	}
 }
 

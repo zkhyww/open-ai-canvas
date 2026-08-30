@@ -27,11 +27,13 @@ export async function executeTextGeneration({
     applyGenerationTaskResult,
     registerPendingNodeIds,
     taskContext,
+    skillMetadata,
     retryContext,
 }: CanvasGenerationExecution) {
     const isConfigNode = sourceNode?.type === CanvasNodeType.Config;
     const isDirectTextTarget = sourceNode?.type === CanvasNodeType.Text && !sourceNode.metadata?.content?.trim() && !editingTextNode;
-    const textCount = isConfigNode || (isDirectTextTarget && sourceNode?.metadata?.count) ? getGenerationCount(generationConfig.count) : 1;
+    // 独立文本份数（textCount），默认 1，不再复用餐图片数量 count（对齐上游 v0.16 语义）
+    const textCount = getGenerationCount(String(sourceNode?.metadata?.textCount ?? 1));
     const parentConfig = NODE_DEFAULT_SIZE[isConfigNode ? CanvasNodeType.Config : CanvasNodeType.Text];
     const textConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Text];
     const parentPosition = sourceNode?.position || { x: 0, y: 0 };
@@ -49,7 +51,7 @@ export async function executeTextGeneration({
             },
             width: textConfig.width,
             height: textConfig.height,
-            metadata: { prompt: effectivePrompt, status: NODE_STATUS_LOADING, fontSize: 14 },
+            metadata: { prompt: effectivePrompt, status: NODE_STATUS_LOADING, fontSize: 14, ...skillMetadata },
         }));
         setNodes((current) => [...current.map((node) => (node.id === nodeId && isConfigNode ? { ...node, metadata: { ...node.metadata, prompt: effectivePrompt, status: NODE_STATUS_LOADING, errorDetails: undefined } } : node)), ...childNodes]);
         setConnections((current) => [...current, ...childIds.map((childId) => ({ id: nanoid(), fromNodeId: nodeId, toNodeId: childId }))]);
@@ -70,7 +72,7 @@ export async function executeTextGeneration({
                     referenceImages: generationContext.referenceImages,
                     referenceVideos: generationContext.referenceVideos,
                     signal: controller.signal,
-                    metadata: { sourceNodeId: nodeId, ...taskContext, resolvedCharacterVersions: generationContext.resolvedCharacterVersions },
+                    metadata: { sourceNodeId: nodeId, ...taskContext, resolvedCharacterVersions: generationContext.resolvedCharacterVersions, ...skillMetadata },
                 },
                 {
                     bindTask: (task) => bindGenerationTask(targetNodeId, task),
@@ -84,6 +86,6 @@ export async function executeTextGeneration({
     if (controller.signal.aborted) return;
     void answers;
     if (isConfigNode) {
-        setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS, errorDetails: undefined, generationErrorCode: undefined, failedPromptFingerprint: undefined } } : node)));
+        setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS, errorDetails: undefined, generationErrorCode: undefined, resourceReloadAvailable: undefined, failedPromptFingerprint: undefined } } : node)));
     }
 }

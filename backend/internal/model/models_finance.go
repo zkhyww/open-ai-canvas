@@ -32,12 +32,16 @@ type CreditLedgerEntry struct {
 }
 
 type BillingOrder struct {
-	ID                           string        `json:"id" gorm:"primaryKey;size:36"`
-	UserID                       string        `json:"userId" gorm:"size:36;index;uniqueIndex:idx_billing_user_idempotency,priority:1"`
-	IdempotencyKey               string        `json:"idempotencyKey" gorm:"size:160;uniqueIndex:idx_billing_user_idempotency,priority:2"`
-	TaskID                       string        `json:"taskId,omitempty" gorm:"index;size:36"`
-	ChannelID                    string        `json:"channelId" gorm:"index;size:36"`
-	ChannelModelID               string        `json:"channelModelId" gorm:"index;size:36"`
+	ID             string `json:"id" gorm:"primaryKey;size:36"`
+	UserID         string `json:"userId" gorm:"size:36;index;uniqueIndex:idx_billing_user_idempotency,priority:1"`
+	IdempotencyKey string `json:"idempotencyKey" gorm:"size:160;uniqueIndex:idx_billing_user_idempotency,priority:2"`
+	TaskID         string `json:"taskId,omitempty" gorm:"index;size:36"`
+	ChannelID      string `json:"channelId" gorm:"index;size:36"`
+	ChannelModelID string `json:"channelModelId" gorm:"index;size:36"`
+	// PriceTierID/Version 记录任务实际命中的规格档；金额字段仍是不可变结算快照。
+	PriceTierID                  string        `json:"priceTierId,omitempty" gorm:"index;size:36"`
+	PriceTierVersion             int64         `json:"priceTierVersion"`
+	PriceSelectorJSON            string        `json:"-" gorm:"type:text"`
 	Model                        string        `json:"model" gorm:"index;size:120"`
 	Capability                   string        `json:"capability" gorm:"index;size:32"`
 	Scene                        string        `json:"scene" gorm:"index;size:80"`

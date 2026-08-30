@@ -92,6 +92,28 @@ func RegisterUserDataRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, gin.H{"setting": setting})
 	})
+	r.POST("/settings/oss/test", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		if !enforceRateLimit(c, "user-storage-test:"+user.ID, 6, time.Minute) {
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
+		var req service.OSSSettingRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		result, err := svc.TestUserOSSSetting(user, req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, result)
+	})
 	r.GET("/resources", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {
@@ -118,6 +140,23 @@ func RegisterUserDataRoutes(r *gin.RouterGroup, svc *service.Service) {
 			return
 		}
 		ok(c, gin.H{"usage": usage})
+	})
+	r.POST("/resources/:id/ark-private-asset", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		policy, available := loadRuntimePolicy(c, svc)
+		if !available || !enforceRateLimit(c, "resources-ark-private-asset:"+user.ID, policy.Request.ResourceImportPerMinute, time.Minute) {
+			return
+		}
+		result, err := svc.SyncResourceToArkPrivateAsset(c.Request.Context(), user, c.Param("id"))
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"sync": result})
 	})
 	r.POST("/resources", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
@@ -273,7 +312,7 @@ func RegisterUserDataRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		c.DataFromReader(stream.StatusCode, stream.ContentLength, resource.MimeType, stream.Body, nil)
 	})
-	r.GET("/public/resources/:id/file", func(c *gin.Context) {
+	publicResourceHandler := func(c *gin.Context) {
 		stream, err := svc.OpenPublicResourceRange(c.Param("id"), c.Query("expires"), c.Query("signature"), c.GetHeader("Range"))
 		if err != nil {
 			failService(c, err)
@@ -297,7 +336,9 @@ func RegisterUserDataRoutes(r *gin.RouterGroup, svc *service.Service) {
 			return
 		}
 		c.DataFromReader(stream.StatusCode, stream.ContentLength, resource.MimeType, stream.Body, nil)
-	})
+	}
+	r.GET("/public/resources/:id/file", publicResourceHandler)
+	r.GET("/public/resources/:id/file/:filename", publicResourceHandler)
 	r.GET("/assets", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {

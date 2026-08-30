@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -118,6 +119,7 @@ type PublicModelChannel struct {
 type PublicChannelModelPrice struct {
 	Model                        string                     `json:"model"`
 	DisplayName                  string                     `json:"displayName"`
+	Icon                         string                     `json:"icon"`
 	Capability                   string                     `json:"capability"`
 	Protocol                     model.ChannelInterfaceType `json:"protocol"`
 	BillingMode                  string                     `json:"billingMode"`
@@ -335,7 +337,9 @@ func (s *Service) UpdateUser(actor *model.User, userID string, req UpdateUserReq
 			return nil, err
 		}
 		user.PasswordHash = hash
-		_ = s.repo.DeleteUserAuthSessions(user.ID)
+		if err := s.repo.DeleteUserAuthSessions(user.ID); err != nil {
+			return nil, fmt.Errorf("清理旧登录会话失败，密码未更新：%w", err)
+		}
 	}
 	user.Role = nextRole
 	user.Status = nextStatus
@@ -504,7 +508,11 @@ func (s *Service) CreateSystemChannel(actor *model.User, req ChannelRequest) (*P
 	if err := s.RequireAdmin(actor); err != nil {
 		return nil, err
 	}
-	channel, err := s.channelFromRequest(req, model.ModelChannel{ID: newID(), UserID: actor.ID, Scope: model.ChannelScopeSystem, Enabled: true})
+	channelID, err := s.repo.NextPrefixedID("CHANNEL")
+	if err != nil {
+		return nil, err
+	}
+	channel, err := s.channelFromRequest(req, model.ModelChannel{ID: channelID, UserID: actor.ID, Scope: model.ChannelScopeSystem, Enabled: true})
 	if err != nil {
 		return nil, err
 	}
@@ -517,6 +525,7 @@ func (s *Service) CreateSystemChannel(actor *model.User, req ChannelRequest) (*P
 	if err := s.syncInitialChannelModels(&channel, req.Models); err != nil {
 		return nil, err
 	}
+	s.invalidateRouteCatalog()
 	items, err := s.repo.ChannelModels(channel.ID, true)
 	if err != nil {
 		return nil, err
@@ -560,6 +569,7 @@ func (s *Service) UpdateSystemChannel(actor *model.User, id string, req ChannelR
 	if err := s.syncInitialChannelModels(&next, req.Models); err != nil {
 		return nil, err
 	}
+	s.invalidateRouteCatalog()
 	items, err := s.repo.ChannelModels(next.ID, true)
 	if err != nil {
 		return nil, err
@@ -611,6 +621,9 @@ func (s *Service) DeleteSystemChannel(actor *model.User, id string) error {
 	err = s.repo.DeleteSystemChannel(channel.ID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return BadAuthRequest("系统渠道不存在或已删除")
+	}
+	if err == nil {
+		s.invalidateRouteCatalog()
 	}
 	return err
 }
@@ -805,15 +818,6 @@ func mergeChannelRequest(req ChannelRequest, channel model.ModelChannel) Channel
 	return req
 }
 
-func validChannelInterfaceType(value model.ChannelInterfaceType) bool {
-	switch value {
-	case model.ChannelInterfaceChatCompletion, model.ChannelInterfaceOpenAIResponse, model.ChannelInterfaceOpenAIImage, model.ChannelInterfaceGrokImage, model.ChannelInterfaceVolcengineArkImage, model.ChannelInterfaceVolcengineJiMengImage, model.ChannelInterfaceOpenAIAudio, model.ChannelInterfaceAsyncAudio, model.ChannelInterfaceNewAPIVideo, model.ChannelInterfaceNewAPIChannel1, model.ChannelInterfaceNewAPIChannel2, model.ChannelInterfaceXAIVideo, model.ChannelInterfaceVolcengineArkVideo, model.ChannelInterfaceVolcengineJiMengVideo, model.ChannelInterfaceGeminiVeo:
-		return true
-	default:
-		return false
-	}
-}
-
 func publicChannel(channel model.ModelChannel, admin bool, channelModels []model.ChannelModel) PublicModelChannel {
 	models := make([]string, 0, len(channelModels))
 	modelCosts := make([]PublicChannelModelPrice, 0, len(channelModels))
@@ -823,8 +827,13 @@ func publicChannel(channel model.ModelChannel, admin bool, channelModels []model
 		}
 		models = append(models, item.ModelKey)
 		if item.Enabled && item.PriceConfigured {
-			capabilityConfig, _ := DecodeModelCapabilityConfig(item.CapabilityConfigJSON)
-			modelCosts = append(modelCosts, PublicChannelModelPrice{Model: item.ModelKey, DisplayName: item.DisplayName, Capability: item.Capability, Protocol: item.Protocol, BillingMode: item.BillingMode, UnitPriceMicrocredits: item.UnitPriceMicrocredits, InputTokenPriceMicrocredits: item.InputTokenPriceMicrocredits, OutputTokenPriceMicrocredits: item.OutputTokenPriceMicrocredits, CachedTokenPriceMicrocredits: item.CachedTokenPriceMicrocredits, CapabilityConfig: capabilityConfig})
+			capabilityConfig, decodeErr := DecodeModelCapabilityConfig(item.CapabilityConfigJSON)
+			if decodeErr == nil && capabilityConfig != nil {
+				if normalized, normalizeErr := NormalizeModelCapabilityConfigForModel(item.Capability, string(item.Protocol), firstNonEmpty(item.ProviderModelKey, item.ModelKey), capabilityConfig); normalizeErr == nil {
+					capabilityConfig = normalized
+				}
+			}
+			modelCosts = append(modelCosts, PublicChannelModelPrice{Model: item.ModelKey, DisplayName: item.DisplayName, Icon: item.Icon, Capability: item.Capability, Protocol: item.Protocol, BillingMode: item.BillingMode, UnitPriceMicrocredits: item.UnitPriceMicrocredits, InputTokenPriceMicrocredits: item.InputTokenPriceMicrocredits, OutputTokenPriceMicrocredits: item.OutputTokenPriceMicrocredits, CachedTokenPriceMicrocredits: item.CachedTokenPriceMicrocredits, CapabilityConfig: capabilityConfig})
 		}
 	}
 	if len(models) == 0 {

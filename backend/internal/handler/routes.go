@@ -43,6 +43,8 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 			fail(c, http.StatusBadRequest, err)
 			return
 		}
+		req.TraceID = TraceID(c)
+		req.RequestID = RequestID(c)
 		task, err := svc.CreateTask(user.ID, req)
 		if err != nil {
 			fail(c, http.StatusBadRequest, err)
@@ -63,7 +65,7 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 			ActiveOnly: c.Query("activeOnly") == "true",
 		})
 		if err != nil {
-			fail(c, http.StatusInternalServerError, err)
+			failService(c, err)
 			return
 		}
 		ok(c, tasks)
@@ -172,6 +174,26 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, task)
 	})
+	r.POST("/tasks/:id/text-replay-complete", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		var req struct {
+			Text string `json:"text"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		task, err := svc.CompleteTextReplayTask(user.ID, c.Param("id"), req.Text)
+		if err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		ok(c, task)
+	})
 	r.GET("/tasks/:id/logs", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {
@@ -180,7 +202,7 @@ func RegisterTaskRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		logs, err := svc.TaskLogs(user.ID, c.Param("id"))
 		if err != nil {
-			fail(c, http.StatusInternalServerError, err)
+			failService(c, err)
 			return
 		}
 		ok(c, logs)
@@ -212,6 +234,10 @@ func streamTaskTextEvents(c *gin.Context, svc *service.Service, userID string, t
 		return
 	}
 	c.Writer.Flush()
+	lastStatus := replay.Status
+	lastStage := replay.Stage
+	lastProgress := replay.Progress
+	writeTaskTextSSE(c, "progress", 0, map[string]any{"status": replay.Status, "stage": replay.Stage, "progress": replay.Progress})
 
 	pollTicker := time.NewTicker(750 * time.Millisecond)
 	heartbeatTicker := time.NewTicker(15 * time.Second)
@@ -240,6 +266,10 @@ func streamTaskTextEvents(c *gin.Context, svc *service.Service, userID string, t
 		if err != nil {
 			writeTaskTextSSE(c, "error", 0, map[string]string{"message": "任务文本流不可用"})
 			return
+		}
+		if next.Status != lastStatus || next.Stage != lastStage || next.Progress != lastProgress {
+			writeTaskTextSSE(c, "progress", 0, map[string]any{"status": next.Status, "stage": next.Stage, "progress": next.Progress})
+			lastStatus, lastStage, lastProgress = next.Status, next.Stage, next.Progress
 		}
 		replay = next
 	}
@@ -274,6 +304,8 @@ func RegisterSessionRoutes(r *gin.RouterGroup, svc *service.Service) {
 			fail(c, http.StatusBadRequest, err)
 			return
 		}
+		req.TraceID = TraceID(c)
+		req.RequestID = RequestID(c)
 		detail, err := svc.CreateSession(user.ID, req)
 		if err != nil {
 			fail(c, http.StatusBadRequest, err)
@@ -312,7 +344,7 @@ func RegisterSessionRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		item, err := svc.StoreUpload(user.ID, c.PostForm("sessionId"), file)
 		if err != nil {
-			fail(c, http.StatusInternalServerError, err)
+			failService(c, err)
 			return
 		}
 		ok(c, item)
@@ -334,17 +366,4 @@ func RegisterSessionRoutes(r *gin.RouterGroup, svc *service.Service) {
 	r.GET("/sessions/:id", querySession)
 	r.POST("/files", uploadFile)
 	r.GET("/sessions/:id/results", downloadResults)
-	// 兼容旧客户端的废弃路由；新调用统一使用上方 REST 风格路径。
-	r.POST("/create_session", createSession)
-	r.GET("/query_session/:id", querySession)
-	r.POST("/upload_file", uploadFile)
-	r.GET("/download_results/:id", downloadResults)
-}
-
-func ok(c *gin.Context, data any) {
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": data, "msg": "ok"})
-}
-
-func fail(c *gin.Context, status int, err error) {
-	c.JSON(status, gin.H{"code": status, "data": nil, "msg": err.Error()})
 }

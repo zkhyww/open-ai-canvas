@@ -1,6 +1,8 @@
 import { Button, Tooltip } from "antd";
-import { Eye, FileText, FolderKanban, Image as ImageIcon, Play, RotateCcw, Video, X } from "lucide-react";
+import { Eye, FileText, FolderKanban, Image as ImageIcon, Play, RotateCcw, Video } from "lucide-react";
+import { useState } from "react";
 
+import { MediaPreview } from "@/components/media-preview";
 import { CONTENT_MODERATION_ERROR_CODE, generationErrorMessage, isContentModerationError } from "@/lib/generation-error";
 import { formatTaskKind, statusLabel } from "@/lib/generation-task-display";
 import type { GenerationTask } from "@/services/api/task-center";
@@ -16,7 +18,6 @@ export function TaskListRow({
     actingId,
     onOpen,
     onRetry,
-    onCancel,
     onPreview,
 }: {
     task: GenerationTask;
@@ -27,7 +28,6 @@ export function TaskListRow({
     actingId: string;
     onOpen: () => void;
     onRetry: () => void;
-    onCancel: () => void;
     onPreview: () => void;
 }) {
     const context = getTaskCanvasContext(task, canvasById, projectNameById);
@@ -92,11 +92,6 @@ export function TaskListRow({
                         />
                     </Tooltip>
                 ) : null}
-                {isActive ? (
-                    <Tooltip title="取消任务">
-                        <Button type="text" size="small" danger icon={<X className="size-3.5" />} aria-label="取消任务" loading={actingId === task.id} onClick={onCancel} />
-                    </Tooltip>
-                ) : null}
             </div>
         </article>
     );
@@ -105,6 +100,8 @@ export function TaskListRow({
 function TaskPreviewThumbnail({ task, onOpen }: { task: GenerationTask; onOpen: () => void }) {
     const isVideo = task.previewKind === "video";
     const fallbackVideo = task.type.includes("video");
+    const [unavailableUrl, setUnavailableUrl] = useState("");
+    const previewUnavailable = Boolean(task.previewUrl && unavailableUrl === task.previewUrl);
     if (!task.previewUrl) {
         const Icon = fallbackVideo ? Video : task.type.includes("image") ? ImageIcon : FileText;
         return (
@@ -114,15 +111,20 @@ function TaskPreviewThumbnail({ task, onOpen }: { task: GenerationTask; onOpen: 
         );
     }
     return (
-        <button type="button" onClick={onOpen} className="task-record-thumb group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={isVideo ? "放大预览生成视频" : "放大预览生成图片"}>
-            {isVideo ? (
-                <video src={task.previewUrl} width={68} height={48} muted playsInline preload="metadata" className="h-full w-full object-cover" />
-            ) : (
-                <img src={task.previewUrl} alt="" width={68} height={48} loading="lazy" className="h-full w-full object-cover" />
-            )}
-            <span className="absolute inset-0 grid place-items-center bg-black/0 text-white opacity-0 transition-[background-color,opacity] duration-150 group-hover:bg-black/30 group-hover:opacity-100 group-focus-visible:bg-black/30 group-focus-visible:opacity-100">
-                {isVideo ? <Play className="size-4 fill-current" /> : <Eye className="size-4" />}
-            </span>
+        <button
+            type="button"
+            onClick={onOpen}
+            disabled={previewUnavailable}
+            className="task-record-thumb group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={previewUnavailable ? "预览不可用，素材可能已删除" : isVideo ? "放大预览生成视频" : "放大预览生成图片"}
+            title={previewUnavailable ? "预览不可用，素材可能已删除" : undefined}
+        >
+            <MediaPreview src={task.previewUrl} kind={isVideo ? "video" : "image"} width={68} height={48} loading="lazy" className="h-full w-full object-cover" fallbackLabel="预览不可用" onUnavailable={() => setUnavailableUrl(task.previewUrl || "")} />
+            {!previewUnavailable ? (
+                <span className="absolute inset-0 grid place-items-center bg-black/0 text-white opacity-0 transition-[background-color,opacity] duration-150 group-hover:bg-black/30 group-hover:opacity-100 group-focus-visible:bg-black/30 group-focus-visible:opacity-100">
+                    {isVideo ? <Play className="size-4 fill-current" /> : <Eye className="size-4" />}
+                </span>
+            ) : null}
         </button>
     );
 }

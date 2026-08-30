@@ -35,6 +35,11 @@ export function generationTaskMode(task: GenerationTask, fallback?: CanvasGenera
     return fallback || "image";
 }
 
+export function generationTaskCanReloadResource(task: GenerationTask) {
+    const mode = generationTaskMode(task);
+    return task.status === "succeeded" && (mode === "image" || mode === "video" || mode === "audio") && (Boolean(task.resultJson) || Boolean(task.outputs?.length));
+}
+
 export function imageMetadata(image: UploadedImage): CanvasNodeMetadata {
     return {
         content: image.url,
@@ -46,6 +51,7 @@ export function imageMetadata(image: UploadedImage): CanvasNodeMetadata {
         mimeType: image.mimeType,
         errorDetails: undefined,
         generationErrorCode: undefined,
+        resourceReloadAvailable: undefined,
         failedPromptFingerprint: undefined,
     };
 }
@@ -62,6 +68,7 @@ export function videoMetadata(video: UploadedFile): CanvasNodeMetadata {
         durationMs: video.durationMs,
         errorDetails: undefined,
         generationErrorCode: undefined,
+        resourceReloadAvailable: undefined,
         failedPromptFingerprint: undefined,
     };
 }
@@ -76,7 +83,18 @@ export function audioMetadata(audio: UploadedFile): CanvasNodeMetadata {
         durationMs: audio.durationMs,
         errorDetails: undefined,
         generationErrorCode: undefined,
+        resourceReloadAvailable: undefined,
         failedPromptFingerprint: undefined,
+    };
+}
+
+function workflowMetadataForResultNode(): Partial<CanvasNodeMetadata> {
+    return {
+        workflowProvider: undefined,
+        runningHubWorkflowId: undefined,
+        runningHubWorkflowKind: undefined,
+        comfyBridgeWorkflowId: undefined,
+        workflowParameters: undefined,
     };
 }
 
@@ -117,7 +135,7 @@ export async function buildGenerationTaskNodeResult(node: CanvasNodeData, task: 
             width: imageSize.width,
             height: imageSize.height,
             position: { x: node.position.x + node.width / 2 - imageSize.width / 2, y: node.position.y + node.height / 2 - imageSize.height / 2 },
-            metadata: { ...node.metadata, ...imageMetadata(normalizedImage), prompt, ...completedTaskMetadata(task), errorDetails: undefined },
+            metadata: { ...node.metadata, ...workflowMetadataForResultNode(), ...imageMetadata(normalizedImage), prompt, ...completedTaskMetadata(task), errorDetails: undefined },
         };
     }
 
@@ -146,7 +164,7 @@ export async function buildGenerationTaskNodeResult(node: CanvasNodeData, task: 
             ...node,
             type: CanvasNodeType.Video,
             ...geometry,
-            metadata: { ...node.metadata, ...videoMetadata(video), prompt, ...completedTaskMetadata(task), errorDetails: undefined },
+            metadata: { ...node.metadata, ...workflowMetadataForResultNode(), ...videoMetadata(video), prompt, ...completedTaskMetadata(task), errorDetails: undefined },
         };
     }
 
@@ -155,14 +173,14 @@ export async function buildGenerationTaskNodeResult(node: CanvasNodeData, task: 
         const audio = result.audio.storageKey
             ? { url: await resolveMediaUrl(result.audio.storageKey, result.audio.dataUrl), storageKey: result.audio.storageKey, durationMs: result.audio.durationMs, bytes: result.audio.bytes || 0, mimeType: result.audio.mimeType || "audio/mpeg" }
             : await storeGeneratedAudio(await (await fetch(result.audio.dataUrl)).blob(), result.audio.format || "mp3");
-        return { ...node, type: CanvasNodeType.Audio, metadata: { ...node.metadata, ...audioMetadata(audio), prompt, ...completedTaskMetadata(task), errorDetails: undefined } };
+        return { ...node, type: CanvasNodeType.Audio, metadata: { ...node.metadata, ...workflowMetadataForResultNode(), ...audioMetadata(audio), prompt, ...completedTaskMetadata(task), errorDetails: undefined } };
     }
 
     if (!result.text) throw new Error("后端任务没有返回文本");
     return {
         ...node,
         type: CanvasNodeType.Text,
-        metadata: { ...node.metadata, content: result.text, richText: undefined, prompt, ...completedTaskMetadata(task), status: "success", errorDetails: undefined, generationErrorCode: undefined, failedPromptFingerprint: undefined },
+        metadata: { ...node.metadata, content: result.text, richText: undefined, prompt, ...completedTaskMetadata(task), status: "success", errorDetails: undefined, generationErrorCode: undefined, resourceReloadAvailable: undefined, failedPromptFingerprint: undefined },
     };
 }
 
@@ -255,6 +273,9 @@ function completedTaskMetadata(task: GenerationTask): CanvasNodeMetadata {
         taskStatus: task.status,
         taskProgress: typeof task.progress === "number" && Number.isFinite(task.progress) ? Math.max(0, Math.min(100, Math.round(task.progress))) : 100,
         taskStage: task.stage,
+        taskStartedAt: task.startedAt,
+        taskCompletedAt: task.completedAt,
+        taskDurationMs: task.startedAt && task.completedAt ? Math.max(0, Date.parse(task.completedAt) - Date.parse(task.startedAt)) : undefined,
         taskCreatedAt: task.createdAt || task.created_at,
         taskUpdatedAt: task.updatedAt || task.updated_at,
         errorDetails: undefined,

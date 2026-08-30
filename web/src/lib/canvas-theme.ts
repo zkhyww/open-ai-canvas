@@ -5,8 +5,8 @@ export const canvasThemes = {
     light: {
         canvas: {
             background: "#ffffff",
-            dot: "rgba(15,23,42,.14)",
-            line: "rgba(15,23,42,.065)",
+            dot: "rgba(15,23,42,.20)",
+            line: "rgba(15,23,42,.15)",
             selectionFill: "rgba(17,17,17,.10)",
         },
         node: {
@@ -14,6 +14,9 @@ export const canvasThemes = {
             fill: "#ffffff",
             panel: "#ffffff",
             stroke: "#e2e4e8",
+            edge: "rgba(15,23,42,.16)",
+            shadow: "0 6px 18px rgba(15,23,42,.08)",
+            hoverShadow: "0 10px 24px rgba(15,23,42,.12)",
             activeStroke: "#111827",
             placeholder: "#9ca3af",
             text: "#111827",
@@ -67,9 +70,9 @@ export const canvasThemes = {
     },
     dark: {
         canvas: {
-            background: "#090a0c",
-            dot: "rgba(174,184,199,.18)",
-            line: "rgba(174,184,199,.06)",
+            background: "#0b0b0b",
+            dot: "rgba(178,178,178,.18)",
+            line: "rgba(178,178,178,.14)",
             selectionFill: "rgba(255,255,255,.12)",
         },
         node: {
@@ -77,6 +80,9 @@ export const canvasThemes = {
             fill: "#181818",
             panel: "#141414",
             stroke: "rgba(255,255,255,.12)",
+            edge: "rgba(255,255,255,.18)",
+            shadow: "0 8px 24px rgba(0,0,0,.34)",
+            hoverShadow: "0 12px 30px rgba(0,0,0,.46)",
             activeStroke: "#f1f1f1",
             placeholder: "#737373",
             text: "#ededed",

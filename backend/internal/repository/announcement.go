@@ -24,7 +24,7 @@ func (r *Repository) AdminAnnouncements(keyword string, status model.Announcemen
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := query.Order("published_at desc").Limit(limit).Offset(offset).Find(&announcements).Error; err != nil {
+	if err := query.Order("pinned desc, published_at desc").Limit(limit).Offset(offset).Find(&announcements).Error; err != nil {
 		return nil, 0, err
 	}
 	return announcements, total, nil
@@ -34,7 +34,7 @@ func (r *Repository) AnnouncementFeed(userID string) ([]model.Announcement, int6
 	var announcements []model.Announcement
 	var unreadCount int64
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("status = ?", model.AnnouncementStatusActive).Order("published_at desc").Find(&announcements).Error; err != nil {
+		if err := tx.Where("status = ?", model.AnnouncementStatusActive).Order("pinned desc, published_at desc").Find(&announcements).Error; err != nil {
 			return err
 		}
 		return tx.Model(&model.Announcement{}).
@@ -58,28 +58,6 @@ func (r *Repository) CloseAnnouncement(id string, closedAt time.Time) (bool, err
 		Where("id = ? AND status = ?", id, model.AnnouncementStatusActive).
 		Updates(map[string]any{"status": model.AnnouncementStatusClosed, "closed_at": closedAt, "updated_at": closedAt})
 	return result.RowsAffected == 1, result.Error
-}
-
-func (r *Repository) UpdateAnnouncement(announcement *model.Announcement) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&model.Announcement{}).Where("id = ?", announcement.ID).Updates(map[string]any{
-			"title":        announcement.Title,
-			"content":      announcement.Content,
-			"level":        announcement.Level,
-			"status":       announcement.Status,
-			"published_at": announcement.PublishedAt,
-			"closed_at":    announcement.ClosedAt,
-			"updated_at":   announcement.UpdatedAt,
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return gorm.ErrRecordNotFound
-		}
-		// 重新发布同一公告必须清除旧已读记录，否则用户看不到新的内容提醒。
-		return tx.Where("announcement_id = ?", announcement.ID).Delete(&model.UserAnnouncementRead{}).Error
-	})
 }
 
 func (r *Repository) MarkAnnouncementsRead(userID string, announcementIDs []string, readAt time.Time) error {

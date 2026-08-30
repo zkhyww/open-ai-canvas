@@ -4,15 +4,17 @@ import { App } from "antd";
 import { saveAs } from "file-saver";
 
 import { NODE_DEFAULT_SIZE } from "@/constant/canvas";
-import { FRAME_COLLAPSED_HEIGHT, FRAME_COLLAPSED_WIDTH, getFrameChildIds, isFrameNode } from "@/lib/canvas/canvas-frame";
+import { FOLDER_COLLAPSED_HEIGHT, FOLDER_COLLAPSED_WIDTH, FRAME_COLLAPSED_HEIGHT, FRAME_COLLAPSED_WIDTH, getFrameChildIds, isCanvasFolderNode, isFrameNode } from "@/lib/canvas/canvas-frame";
+import { buildCanvasMediaDownloadFileName } from "@/lib/canvas/canvas-media-download";
 import { applyBatchPrimaryImage, applyNodeConfigPatch } from "@/lib/canvas/canvas-project-domain";
-import { audioExtension, imageExtension, resetGenerationTaskMetadata } from "@/lib/canvas/canvas-project-generation";
+import { resetGenerationTaskMetadata } from "@/lib/canvas/canvas-project-generation";
 import { CONTENT_MODERATION_ERROR_CODE, isContentModerationError } from "@/lib/generation-error";
 import { ensureCanvasNodeAsset } from "@/services/project-asset-sync";
-import { CanvasNodeType, type CanvasNodeData, type CanvasNodeMetadata, type Position } from "@/types/canvas";
+import { CanvasNodeType, type CanvasFolderStyle, type CanvasFolderTheme, type CanvasNodeData, type CanvasNodeMetadata, type Position } from "@/types/canvas";
 
 type UseCanvasNodeEditorOptions = {
     canvasId: string;
+    canvasTitle: string;
     domainProjectId?: string;
     nodesRef: { current: CanvasNodeData[] };
     setNodes: Dispatch<SetStateAction<CanvasNodeData[]>>;
@@ -25,6 +27,7 @@ type UseCanvasNodeEditorOptions = {
 
 export function useCanvasNodeEditor({
     canvasId,
+    canvasTitle,
     domainProjectId,
     nodesRef,
     setNodes,
@@ -47,9 +50,11 @@ export function useCanvasNodeEditor({
                 const nextPosition = position || node.position;
                 if (node.width === width && node.height === height && node.position.x === nextPosition.x && node.position.y === nextPosition.y) return node;
                 changed = true;
-                const resized = { ...node, width, height, position: nextPosition };
+                // 打上「用户手动定过尺寸」标记：图片按真实比例自动适配时要避让它，
+                // 否则每次图片重新加载都会把用户拉过的尺寸改回去。
+                const resized = { ...node, width, height, position: nextPosition, metadata: { ...node.metadata, manualSize: true } };
                 if (!isFrameNode(node) || node.metadata?.frame?.collapsed) return resized;
-                return { ...resized, metadata: { ...node.metadata, frame: { collapsed: false, expandedWidth: width, expandedHeight: height } } };
+                return { ...resized, metadata: { ...resized.metadata, frame: { collapsed: false, expandedWidth: width, expandedHeight: height } } };
             });
             return changed ? next : current;
         });
@@ -64,9 +69,10 @@ export function useCanvasNodeEditor({
             current.map((node) => {
                 if (node.id !== nodeId) return node;
                 const frameState = node.metadata?.frame;
+                const folder = isCanvasFolderNode(node);
                 return collapsed
                     ? { ...node, width: frameState?.expandedWidth || NODE_DEFAULT_SIZE[CanvasNodeType.Frame].width, height: frameState?.expandedHeight || NODE_DEFAULT_SIZE[CanvasNodeType.Frame].height, metadata: { ...node.metadata, frame: { collapsed: false, expandedWidth: frameState?.expandedWidth || NODE_DEFAULT_SIZE[CanvasNodeType.Frame].width, expandedHeight: frameState?.expandedHeight || NODE_DEFAULT_SIZE[CanvasNodeType.Frame].height } } }
-                    : { ...node, width: FRAME_COLLAPSED_WIDTH, height: FRAME_COLLAPSED_HEIGHT, metadata: { ...node.metadata, frame: { collapsed: true, expandedWidth: node.width, expandedHeight: node.height } } };
+                    : { ...node, width: folder ? FOLDER_COLLAPSED_WIDTH : FRAME_COLLAPSED_WIDTH, height: folder ? FOLDER_COLLAPSED_HEIGHT : FRAME_COLLAPSED_HEIGHT, metadata: { ...node.metadata, frame: { collapsed: true, expandedWidth: node.width, expandedHeight: node.height } } };
             }),
         );
         setSelectedNodeIds(new Set([nodeId]));
@@ -78,6 +84,22 @@ export function useCanvasNodeEditor({
 
     const handleNodeTitleChange = useCallback((nodeId: string, title: string) => {
         setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, title } : node)));
+    }, [setNodes]);
+
+    const handleFolderStyleChange = useCallback((nodeId: string, style: CanvasFolderStyle) => {
+        setNodes((current) => current.map((node) => {
+            if (node.id !== nodeId || !isCanvasFolderNode(node)) return node;
+            const folder = node.metadata!.folder!;
+            return { ...node, metadata: { ...node.metadata, folder: { ...folder, style, createdAt: folder.createdAt || new Date().toISOString() } } };
+        }));
+    }, [setNodes]);
+
+    const handleFolderThemeChange = useCallback((nodeId: string, theme: CanvasFolderTheme) => {
+        setNodes((current) => current.map((node) => {
+            if (node.id !== nodeId || !isCanvasFolderNode(node)) return node;
+            const folder = node.metadata!.folder!;
+            return { ...node, metadata: { ...node.metadata, folder: { ...folder, theme, themeCover: undefined, createdAt: folder.createdAt || new Date().toISOString() } } };
+        }));
     }, [setNodes]);
 
     const toggleNodeFreeResize = useCallback((nodeId: string) => {
@@ -140,7 +162,12 @@ export function useCanvasNodeEditor({
     }, [setNodes]);
 
     const handleConfigNodeChange = useCallback((nodeId: string, patch: Partial<CanvasNodeMetadata>) => {
-        setNodes((current) => current.map((node) => (node.id === nodeId ? applyNodeConfigPatch(node, patch) : node)));
+        setNodes((current) => {
+            const next = current.map((node) => (node.id === nodeId ? applyNodeConfigPatch(node, patch) : node));
+            // 生成入口读取 nodesRef；同步写入，避免刚修改工作流比例就立即生成时仍提交旧值。
+            nodesRef.current = next;
+            return next;
+        });
         if (!patch.assetCategory) return;
         const node = nodesRef.current.find((item) => item.id === nodeId);
         if (!node?.metadata?.content?.trim()) return;
@@ -156,8 +183,8 @@ export function useCanvasNodeEditor({
 
     const downloadNodeImage = useCallback((node: CanvasNodeData) => {
         if ((node.type !== CanvasNodeType.Image && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content) return;
-        saveAs(node.metadata.content, `canvas-${node.type}-${node.id}.${node.type === CanvasNodeType.Video ? "mp4" : node.type === CanvasNodeType.Audio ? audioExtension(node.metadata.mimeType) : imageExtension(node.metadata.content)}`);
-    }, []);
+        saveAs(node.metadata.content, buildCanvasMediaDownloadFileName(canvasTitle, node));
+    }, [canvasTitle]);
 
     const saveNodeAsset = useCallback(async (node: CanvasNodeData) => {
         if (node.type !== CanvasNodeType.Text && node.type !== CanvasNodeType.Image && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) return message.error("当前节点类型不能保存为素材");
@@ -180,6 +207,8 @@ export function useCanvasNodeEditor({
         collapsingBatchIds,
         downloadNodeImage,
         handleConfigNodeChange,
+        handleFolderStyleChange,
+        handleFolderThemeChange,
         handleFontSizeChange,
         handleNodeContentChange,
         handleNodePromptChange,

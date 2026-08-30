@@ -1,6 +1,21 @@
 import { resetGenerationTaskMetadata } from "@/lib/canvas/canvas-project-generation";
 import type { CanvasNodeData, CanvasNodeMetadata, StoryboardRow } from "@/types/canvas";
 
+const COPY_TITLE_SUFFIX = /^(.*)_copy(\d+)$/i;
+
+export function nextCopiedNodeTitle(sourceTitle: string, existingTitles: Iterable<string>) {
+    const sourceMatch = sourceTitle.match(COPY_TITLE_SUFFIX);
+    const baseTitle = (sourceMatch?.[1] || sourceTitle.replace(/ Copy$/i, "")).trim() || sourceTitle.trim() || "未命名节点";
+    let maxCopyIndex = 0;
+    for (const title of existingTitles) {
+        const match = title.match(COPY_TITLE_SUFFIX);
+        if (!match || match[1] !== baseTitle) continue;
+        const copyIndex = Number(match[2]);
+        if (Number.isSafeInteger(copyIndex)) maxCopyIndex = Math.max(maxCopyIndex, copyIndex);
+    }
+    return `${baseTitle}_copy${maxCopyIndex + 1}`;
+}
+
 function remapReferenceId(nodeId: string | undefined, idMap: ReadonlyMap<string, string>) {
     return nodeId ? idMap.get(nodeId) || nodeId : undefined;
 }
@@ -23,7 +38,7 @@ function copyStoryboardRow(row: StoryboardRow, idMap: ReadonlyMap<string, string
             ...character,
             characterImageNodeId: remapReferenceId(character.characterImageNodeId, idMap),
         })),
-        referenceNodeIds: remapReferenceIds(row.referenceNodeIds || [], idMap) || [],
+        assetBindings: (row.assetBindings || []).map((binding) => ({ ...binding, nodeId: remapReferenceId(binding.nodeId, idMap)! })),
         imageNodeId,
         videoNodeId,
         status: hasCopiedOutput ? row.status : "idle",
@@ -78,5 +93,14 @@ export function isolateCopiedNodeMetadata(node: CanvasNodeData, idMap: ReadonlyM
         visibleColumns: [...node.metadata.storyboard.visibleColumns],
         referenceNodeIds: remapReferenceIds(node.metadata.storyboard.referenceNodeIds, idMap) || [],
     } : undefined;
+    if (node.type === "portrait-clearance" && metadata.portraitClearance) {
+        metadata.portraitClearance = {
+            ...metadata.portraitClearance,
+            inputBindings: metadata.portraitClearance.inputBindings.map((binding) => ({ ...binding, nodeId: idMap.get(binding.nodeId) || binding.nodeId })),
+            activeTaskId: undefined,
+            task: undefined,
+            lastResult: undefined,
+        };
+    }
     return metadata;
 }

@@ -3,33 +3,40 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/repository"
 
 	"gorm.io/gorm"
 )
 
 type CreateProjectRequest struct {
-	Name             string `json:"name"`
-	Type             string `json:"type"`
-	AspectRatio      string `json:"aspectRatio"`
-	SourceType       string `json:"sourceType"`
-	Description      string `json:"description"`
-	StylePresetID    string `json:"stylePresetId"`
-	StyleProfileJSON string `json:"styleProfileJson"`
+	Name              string `json:"name"`
+	Type              string `json:"type"`
+	AspectRatio       string `json:"aspectRatio"`
+	SourceType        string `json:"sourceType"`
+	Description       string `json:"description"`
+	StylePresetID     string `json:"stylePresetId"`
+	StyleProfileJSON  string `json:"styleProfileJson"`
+	DefaultImageModel string `json:"defaultImageModel"`
+	DefaultVideoModel string `json:"defaultVideoModel"`
 }
 
 type UpdateProjectRequest struct {
-	Name             string  `json:"name"`
-	Type             string  `json:"type"`
-	AspectRatio      string  `json:"aspectRatio"`
-	SourceType       string  `json:"sourceType"`
-	Description      *string `json:"description"`
-	StylePresetID    *string `json:"stylePresetId"`
-	StyleProfileJSON *string `json:"styleProfileJson"`
-	Status           string  `json:"status"`
+	Name              string  `json:"name"`
+	Type              string  `json:"type"`
+	AspectRatio       string  `json:"aspectRatio"`
+	SourceType        string  `json:"sourceType"`
+	Description       *string `json:"description"`
+	CoverResourceID   *string `json:"coverResourceId"`
+	StylePresetID     *string `json:"stylePresetId"`
+	StyleProfileJSON  *string `json:"styleProfileJson"`
+	DefaultImageModel *string `json:"defaultImageModel"`
+	DefaultVideoModel *string `json:"defaultVideoModel"`
+	Status            string  `json:"status"`
 }
 
 type CreateProjectUnitRequest struct {
@@ -67,16 +74,28 @@ type ProjectSummary struct {
 	CompletedUnitCount int           `json:"completedUnitCount"`
 }
 
+type ProjectListPage struct {
+	Projects []ProjectSummary `json:"projects"`
+	Page     int              `json:"page"`
+	PageSize int              `json:"pageSize"`
+	Total    int64            `json:"total"`
+	HasMore  bool             `json:"hasMore"`
+}
+
 type ProjectDetail struct {
 	Project         model.Project                 `json:"project"`
 	Units           []model.ProjectUnit           `json:"units"`
 	Canvases        []model.CanvasProject         `json:"canvases"`
 	CanvasUnitLinks []model.CanvasUnitLink        `json:"canvasUnitLinks"`
 	Assets          []ProjectAssetSummary         `json:"assets"`
+	AssetFolders    []model.ProjectAssetFolder    `json:"assetFolders"`
 	Workflows       []ProjectWorkflowDetail       `json:"workflows"`
 	Shots           []model.Shot                  `json:"shots"`
+	ShotRevisions   []model.ShotRevision          `json:"shotRevisions"`
+	ShotArtifacts   []model.ShotArtifact          `json:"shotArtifacts"`
 	ShotReferences  []model.ShotAssetReference    `json:"shotReferences"`
 	AssetCandidates []model.ProjectAssetCandidate `json:"assetCandidates"`
+	Tasks           []TaskSummary                 `json:"tasks"`
 }
 
 func (s *Service) ListProjects(userID string) ([]ProjectSummary, error) {
@@ -84,6 +103,22 @@ func (s *Service) ListProjects(userID string) ([]ProjectSummary, error) {
 	if err != nil {
 		return nil, err
 	}
+	return s.summarizeProjects(userID, projects)
+}
+
+func (s *Service) ListProjectsPage(userID string, page int, pageSize int) (ProjectListPage, error) {
+	projects, total, err := s.repo.ProjectsPage(userID, page, pageSize)
+	if err != nil {
+		return ProjectListPage{}, err
+	}
+	result, err := s.summarizeProjects(userID, projects)
+	if err != nil {
+		return ProjectListPage{}, err
+	}
+	return ProjectListPage{Projects: result, Page: page, PageSize: pageSize, Total: total, HasMore: int64(page*pageSize) < total}, nil
+}
+
+func (s *Service) summarizeProjects(userID string, projects []model.Project) ([]ProjectSummary, error) {
 	result := make([]ProjectSummary, 0, len(projects))
 	for _, project := range projects {
 		units, unitsErr := s.repo.ProjectUnitSummaries(project.ID)
@@ -121,6 +156,13 @@ func (s *Service) ProjectDetail(userID string, id string) (ProjectDetail, error)
 			return ProjectDetail{}, err
 		}
 	}
+	if tasks, tasksErr := s.repo.SuccessfulWorkflowTasksForProject(userID, project.ID); tasksErr == nil {
+		for _, task := range tasks {
+			if err := s.RegisterTaskOutputFromTask(task); err != nil {
+				_ = s.log(userID, task.ID, "error", "项目读取时工作流产物补偿失败", err.Error())
+			}
+		}
+	}
 	// 项目工作台只返回章节摘要，长篇小说正文由单章接口按需读取。
 	units, err := s.repo.ProjectUnitSummaries(project.ID)
 	if err != nil {
@@ -138,11 +180,23 @@ func (s *Service) ProjectDetail(userID string, id string) (ProjectDetail, error)
 	if err != nil {
 		return ProjectDetail{}, err
 	}
+	assetFolders, err := s.ProjectAssetFolders(userID, project.ID)
+	if err != nil {
+		return ProjectDetail{}, err
+	}
 	workflows, err := s.ProjectWorkflows(project.ID)
 	if err != nil {
 		return ProjectDetail{}, err
 	}
 	shots, err := s.repo.ProjectShots(project.ID)
+	if err != nil {
+		return ProjectDetail{}, err
+	}
+	shotRevisions, err := s.repo.ProjectShotRevisions(project.ID)
+	if err != nil {
+		return ProjectDetail{}, err
+	}
+	shotArtifacts, err := s.repo.ProjectShotArtifacts(project.ID)
 	if err != nil {
 		return ProjectDetail{}, err
 	}
@@ -154,7 +208,11 @@ func (s *Service) ProjectDetail(userID string, id string) (ProjectDetail, error)
 	if err != nil {
 		return ProjectDetail{}, err
 	}
-	return ProjectDetail{Project: *project, Units: units, Canvases: canvases, CanvasUnitLinks: canvasUnitLinks, Assets: assets, Workflows: workflows, Shots: shots, ShotReferences: shotReferences, AssetCandidates: candidates}, nil
+	tasks, err := s.TasksWithOptions(userID, TaskListOptions{Limit: 100, ProjectID: project.ID})
+	if err != nil {
+		return ProjectDetail{}, err
+	}
+	return ProjectDetail{Project: *project, Units: units, Canvases: canvases, CanvasUnitLinks: canvasUnitLinks, Assets: assets, AssetFolders: assetFolders, Workflows: workflows, Shots: shots, ShotRevisions: shotRevisions, ShotArtifacts: shotArtifacts, ShotReferences: shotReferences, AssetCandidates: candidates, Tasks: tasks}, nil
 }
 
 func (s *Service) CreateProject(userID string, req CreateProjectRequest) (model.Project, error) {
@@ -186,12 +244,22 @@ func (s *Service) CreateProject(userID string, req CreateProjectRequest) (model.
 		return model.Project{}, BadAuthRequest(err.Error())
 	}
 	now := time.Now()
-	project := model.Project{ID: newID(), UserID: userID, Name: name, Type: projectType, AspectRatio: aspectRatio, SourceType: sourceType, Description: strings.TrimSpace(req.Description), StylePresetID: stylePresetID, StyleProfileJSON: styleProfileJSON, Status: model.ProjectStatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	defaultImageModel, err := normalizeProjectDefaultModel(req.DefaultImageModel)
+	if err != nil {
+		return model.Project{}, err
+	}
+	defaultVideoModel, err := normalizeProjectDefaultModel(req.DefaultVideoModel)
+	if err != nil {
+		return model.Project{}, err
+	}
+	project := model.Project{ID: newID(), UserID: userID, Name: name, Type: projectType, AspectRatio: aspectRatio, SourceType: sourceType, Description: strings.TrimSpace(req.Description), StylePresetID: stylePresetID, StyleProfileJSON: styleProfileJSON, DefaultImageModel: defaultImageModel, DefaultVideoModel: defaultVideoModel, Status: model.ProjectStatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if err := s.repo.CreateProject(&project); err != nil {
 		return model.Project{}, err
 	}
 	if _, err := s.createProjectWorkflow(project.ID, "", "project"); err != nil {
-		_ = s.repo.DeleteProject(userID, project.ID)
+		if deleteErr := s.repo.DeleteProject(userID, project.ID, nil); deleteErr != nil {
+			return model.Project{}, errors.Join(err, fmt.Errorf("项目初始化失败，回滚项目记录失败：%w", deleteErr))
+		}
 		return model.Project{}, err
 	}
 	project.Revision++
@@ -219,6 +287,22 @@ func (s *Service) UpdateProject(userID string, id string, req UpdateProjectReque
 	if req.Description != nil {
 		project.Description = strings.TrimSpace(*req.Description)
 	}
+	if req.CoverResourceID != nil {
+		coverResourceID := strings.TrimSpace(*req.CoverResourceID)
+		if coverResourceID != "" {
+			resource, resourceErr := s.repo.ResourceForUser(userID, coverResourceID)
+			if resourceErr != nil {
+				if errors.Is(resourceErr, gorm.ErrRecordNotFound) {
+					return model.Project{}, BadAuthRequest("项目主图不存在或不属于当前用户")
+				}
+				return model.Project{}, resourceErr
+			}
+			if resource.Status != model.ResourceStatusReady || resource.Kind != "image" {
+				return model.Project{}, BadAuthRequest("项目主图必须是已就绪的图片资源")
+			}
+		}
+		project.CoverResourceID = coverResourceID
+	}
 	if req.StylePresetID != nil {
 		project.StylePresetID = strings.TrimSpace(*req.StylePresetID)
 	}
@@ -228,6 +312,20 @@ func (s *Service) UpdateProject(userID string, id string, req UpdateProjectReque
 			return model.Project{}, BadAuthRequest(profileErr.Error())
 		}
 		project.StyleProfileJSON = styleProfileJSON
+	}
+	if req.DefaultImageModel != nil {
+		defaultImageModel, modelErr := normalizeProjectDefaultModel(*req.DefaultImageModel)
+		if modelErr != nil {
+			return model.Project{}, modelErr
+		}
+		project.DefaultImageModel = defaultImageModel
+	}
+	if req.DefaultVideoModel != nil {
+		defaultVideoModel, modelErr := normalizeProjectDefaultModel(*req.DefaultVideoModel)
+		if modelErr != nil {
+			return model.Project{}, modelErr
+		}
+		project.DefaultVideoModel = defaultVideoModel
 	}
 	if err := validateStyleProfilePreset(project.StylePresetID, project.StyleProfileJSON); err != nil {
 		return model.Project{}, BadAuthRequest(err.Error())
@@ -246,11 +344,61 @@ func (s *Service) UpdateProject(userID string, id string, req UpdateProjectReque
 	return *project, nil
 }
 
+func normalizeProjectDefaultModel(value string) (string, error) {
+	modelRef := strings.TrimSpace(value)
+	if len(modelRef) > 500 {
+		return "", BadAuthRequest("项目默认模型标识过长")
+	}
+	return modelRef, nil
+}
+
 func (s *Service) DeleteProject(userID string, id string) error {
 	if _, err := s.repo.ProjectForUser(userID, id); err != nil {
 		return err
 	}
-	return s.repo.DeleteProject(userID, id)
+	canvases, err := s.repo.ProjectCanvasDocuments(userID, id)
+	if err != nil {
+		return err
+	}
+	projectScopeIDs := make([]string, 0, len(canvases)+1)
+	projectScopeIDs = append(projectScopeIDs, id)
+	canvasUpdates := make([]model.CanvasProject, 0, len(canvases))
+	deleteTime := time.Now()
+	for _, canvas := range canvases {
+		payloadJSON, payloadErr := canvasPayloadWithoutProject(canvas.PayloadJSON, deleteTime)
+		if payloadErr != nil {
+			return payloadErr
+		}
+		canvas.PayloadJSON = payloadJSON
+		canvas.UpdatedAt = deleteTime
+		canvasUpdates = append(canvasUpdates, canvas)
+		projectScopeIDs = append(projectScopeIDs, canvas.ID)
+	}
+	activeTaskCount, err := s.repo.ActiveTaskCountForProjectIDs(userID, projectScopeIDs)
+	if err != nil {
+		return err
+	}
+	if activeTaskCount > 0 {
+		return BadAuthRequest("项目仍有进行中的生成任务，请等待任务完成或取消后再删除")
+	}
+	if err := s.repo.DeleteProject(userID, id, canvasUpdates); err != nil {
+		if errors.Is(err, repository.ErrProjectHasActiveTasks) {
+			return BadAuthRequest("项目仍有进行中的生成任务，请等待任务完成或取消后再删除")
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Service) activeProjectForUser(userID string, projectID string) (*model.Project, error) {
+	project, err := s.repo.ProjectForUser(userID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if project.Status == model.ProjectStatusArchived {
+		return nil, BadAuthRequest("项目已归档，不能修改短剧生产数据")
+	}
+	return project, nil
 }
 
 func (s *Service) CreateProjectUnit(userID string, projectID string, req CreateProjectUnitRequest) (model.ProjectUnit, error) {
@@ -363,7 +511,7 @@ func newProjectUnit(projectID string, req CreateProjectUnitRequest, position int
 		position = 0
 	}
 	now := time.Now()
-	unit := model.ProjectUnit{ID: newID(), ProjectID: projectID, Kind: kind, Title: title, SourceText: req.SourceText, Status: model.ProjectUnitStatusDraft, Position: position, CreatedAt: now, UpdatedAt: now}
+	unit := model.ProjectUnit{ID: newID(), ProjectID: projectID, Kind: kind, Title: title, SourceText: req.SourceText, WordCount: model.ProjectUnitWordCount(req.SourceText), Status: model.ProjectUnitStatusDraft, Position: position, CreatedAt: now, UpdatedAt: now}
 	return unit, nil
 }
 
@@ -375,10 +523,12 @@ func (s *Service) UpdateProjectUnit(userID string, projectID string, unitID stri
 	if err != nil {
 		return model.ProjectUnit{}, err
 	}
+	sourceChanged := unit.SourceText != req.SourceText
 	if title := strings.TrimSpace(req.Title); title != "" {
 		unit.Title = title
 	}
 	unit.SourceText = req.SourceText
+	unit.WordCount = model.ProjectUnitWordCount(req.SourceText)
 	if status := model.ProjectUnitStatus(strings.TrimSpace(req.Status)); status != "" {
 		if status != model.ProjectUnitStatusDraft && status != model.ProjectUnitStatusReady && status != model.ProjectUnitStatusCompleted {
 			return model.ProjectUnit{}, BadAuthRequest("不支持的章节状态")
@@ -386,10 +536,7 @@ func (s *Service) UpdateProjectUnit(userID string, projectID string, unitID stri
 		unit.Status = status
 	}
 	unit.UpdatedAt = time.Now()
-	if err := s.repo.UpdateProjectUnit(unit); err != nil {
-		return model.ProjectUnit{}, err
-	}
-	if err := s.repo.BumpProjectRevision(projectID); err != nil {
+	if err := s.repo.UpdateProjectUnit(unit, sourceChanged); err != nil {
 		return model.ProjectUnit{}, err
 	}
 	return *unit, nil

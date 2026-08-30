@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { createServer, type Server } from "node:http";
+import type { Express } from "express";
 
 import {
     CONFIG_DIR,
@@ -12,9 +13,10 @@ import {
     type LocalRuntimeConfig,
 } from "./config.js";
 import { createLocalRuntimeApp, type LocalRuntimeModule } from "./local-runtime.js";
-import { LocalRuntimeSessionManager } from "./local-runtime-session.js";
+import { LOCAL_RUNTIME_DEFAULT_SCOPES, LocalRuntimeSessionManager } from "./local-runtime-session.js";
 import { createCanvasAgentHttpModule } from "./modules/canvas-agent-http.js";
 import { createDreaminaHttpModule } from "./modules/dreamina-http.js";
+import { createPortraitClearanceHttpModule } from "./modules/portrait-clearance-http.js";
 
 export type StartLocalRuntimeOptions = {
     config?: LocalRuntimeConfig;
@@ -22,6 +24,14 @@ export type StartLocalRuntimeOptions = {
     port?: number;
     log?: (line: string) => void;
     persistConfig?: (config: LocalRuntimeConfig) => void;
+};
+
+export type LocalRuntimeHandle = {
+    app: Express;
+    server: Server;
+    sessions: LocalRuntimeSessionManager;
+    ready: Promise<void>;
+    close: () => Promise<void>;
 };
 
 export function createDefaultLocalRuntimeModules(config: LocalRuntimeConfig): LocalRuntimeModule[] {
@@ -35,10 +45,11 @@ export function createDefaultLocalRuntimeModules(config: LocalRuntimeConfig): Lo
                 ...Object.values(config.canvases ?? {}).map((canvas) => canvas.workspacePath),
             ],
         }),
+        createPortraitClearanceHttpModule({ ownerId: ensureRuntimeOwnerId(config), configDir: CONFIG_DIR }),
     ];
 }
 
-export function startLocalRuntime(options: StartLocalRuntimeOptions = {}) {
+export function startLocalRuntime(options: StartLocalRuntimeOptions = {}): LocalRuntimeHandle {
     const config = options.config ?? loadConfig(true);
     const persistConfig = options.persistConfig ?? saveConfig;
     const requestedPort = options.port ?? (
@@ -54,10 +65,15 @@ export function startLocalRuntime(options: StartLocalRuntimeOptions = {}) {
         : `http://127.0.0.1:${requestedPort}`;
     const authority = requestedPort === 0 ? "127.0.0.1:0" : `127.0.0.1:${requestedPort}`;
     const modules = [...(options.modules ?? createDefaultLocalRuntimeModules(config))];
+    const scopes = [...new Set([
+        ...LOCAL_RUNTIME_DEFAULT_SCOPES,
+        ...modules.flatMap((module) => module.descriptor.scopes),
+    ])];
     const sessions = new LocalRuntimeSessionManager({
         endpoint,
         trustedOrigins: config.trustedWebOrigins,
         registrations: config.browserRegistrations,
+        scopes,
         persistRegistrations: () => persistConfig(config),
         onSessionRevoked: (sessionId) => {
             for (const module of modules) module.onRuntimeSessionRevoked?.(sessionId);
@@ -95,7 +111,7 @@ export function startLocalRuntime(options: StartLocalRuntimeOptions = {}) {
             await listening(server);
             log("Framefield Local Runtime");
             log("Runtime is listening on 127.0.0.1");
-            log("Codex MCP: codex mcp add infinite-canvas -- npx -y @ddcat666/open-ai-canvas-agent mcp");
+            log("Codex MCP: codex mcp add yingce -- npx -y @ddcat666/open-ai-canvas-agent mcp");
         } catch (startupError) {
             sessions.dispose();
             const cleanupErrors: unknown[] = [];

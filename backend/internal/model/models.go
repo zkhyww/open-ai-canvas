@@ -13,6 +13,7 @@ type ChannelScope string
 type ChannelInterfaceType string
 type ApiCallStatus string
 type ResourceStatus string
+type ResourceDeletionStatus string
 type BillingStatus string
 type CreditLedgerType string
 type RedeemCodeStatus string
@@ -44,6 +45,10 @@ const (
 	TaskStatusSucceeded TaskStatus = "succeeded"
 	TaskStatusFailed    TaskStatus = "failed"
 	TaskStatusCancelled TaskStatus = "cancelled"
+	// text_replay 任务是前端自管、不经过 worker 队列的文本生成存档容器：
+	// 前端直连模型流式生成，把增量 POST 到 /tasks/:id/text-deltas 存档，
+	// 完成后调用 /tasks/:id/text-replay-complete 归并为最终正文。
+	TaskStatusTextReplay TaskStatus = "text_replay"
 
 	SessionStatusActive    SessionStatus = "active"
 	SessionStatusCompleted SessionStatus = "completed"
@@ -60,10 +65,12 @@ const (
 
 	ChannelInterfaceChatCompletion        ChannelInterfaceType = "chat-completion"
 	ChannelInterfaceOpenAIResponse        ChannelInterfaceType = "openai-response"
+	ChannelInterfaceClaudeAPI             ChannelInterfaceType = "claude-api"
 	ChannelInterfaceOpenAIImage           ChannelInterfaceType = "openai-image"
 	ChannelInterfaceGrokImage             ChannelInterfaceType = "grok-image"
 	ChannelInterfaceVolcengineArkImage    ChannelInterfaceType = "volcengine-ark-image"
 	ChannelInterfaceVolcengineJiMengImage ChannelInterfaceType = "volcengine-jimeng-image"
+	ChannelInterfaceGeminiImage           ChannelInterfaceType = "gemini-image"
 	ChannelInterfaceOpenAIAudio           ChannelInterfaceType = "openai-audio"
 	ChannelInterfaceAsyncAudio            ChannelInterfaceType = "async-audio"
 	ChannelInterfaceNewAPIVideo           ChannelInterfaceType = "newapi"
@@ -74,6 +81,14 @@ const (
 	ChannelInterfaceVolcengineJiMengVideo ChannelInterfaceType = "volcengine-jimeng-video"
 	ChannelInterfaceGeminiVeo             ChannelInterfaceType = "gemini-veo"
 	ChannelInterfaceNovitaVideo           ChannelInterfaceType = "novita-video"
+	ChannelInterfaceMiniMaxVideo          ChannelInterfaceType = "minimax-video"
+	ChannelInterfaceAgnesVideo            ChannelInterfaceType = "agnes-video"
+	ChannelInterfaceRunningHubImage       ChannelInterfaceType = "runninghub-workflow-image"
+	ChannelInterfaceRunningHubVideo       ChannelInterfaceType = "runninghub-workflow-video"
+	ChannelInterfaceRunningHubAudio       ChannelInterfaceType = "runninghub-workflow-audio"
+	ChannelInterfaceComfyBridgeImage      ChannelInterfaceType = "comfyui-bridge-image"
+	ChannelInterfaceComfyBridgeVideo      ChannelInterfaceType = "comfyui-bridge-video"
+	ChannelInterfaceComfyBridgeAudio      ChannelInterfaceType = "comfyui-bridge-audio"
 
 	ApiCallStatusSucceeded ApiCallStatus = "succeeded"
 	ApiCallStatusFailed    ApiCallStatus = "failed"
@@ -82,6 +97,9 @@ const (
 	ResourceStatusReady   ResourceStatus = "ready"
 	ResourceStatusFailed  ResourceStatus = "failed"
 	ResourceStatusDeleted ResourceStatus = "deleted"
+
+	ResourceDeletionStatusPending    ResourceDeletionStatus = "pending"
+	ResourceDeletionStatusProcessing ResourceDeletionStatus = "processing"
 
 	BillingStatusReserved  BillingStatus = "reserved"
 	BillingStatusRunning   BillingStatus = "running"

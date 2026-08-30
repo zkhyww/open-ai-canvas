@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
-import { applyCanvasLiveViewport, subscribeCanvasViewportPreview } from "@/lib/canvas/canvas-live-viewport";
+import { applyCanvasLiveViewport, canvasDotGridPx, canvasDotPx, subscribeCanvasViewportPreview } from "@/lib/canvas/canvas-live-viewport";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ViewportTransform } from "@/types/canvas";
 
@@ -25,6 +25,7 @@ type InfiniteCanvasProps = {
 };
 
 const CANVAS_WHEEL_IGNORE_SELECTOR = "[data-canvas-no-zoom],[data-canvas-wheel-scroll],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown";
+const CANVAS_POINTER_IGNORE_SELECTOR = "[data-canvas-no-zoom],[data-connection-create-menu],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown";
 const WHEEL_ZOOM_DELTA = 72;
 const TRACKPAD_PINCH_ZOOM_DELTA = 24;
 
@@ -39,8 +40,10 @@ type PinchState = {
     initialScale: number;
 };
 
-export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "dots", onViewportChange, onViewportPreviewChange, onCanvasMouseDown, boxSelectEnabled = false, onCanvasDoubleClick, onCanvasDeselect, onContextMenu, onDrop, onFileDragEnter, onFileDragLeave, onFileDragOver, graphicsLayer, children }: InfiniteCanvasProps) {
-    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "lines", onViewportChange, onViewportPreviewChange, onCanvasMouseDown, boxSelectEnabled = false, onCanvasDoubleClick, onCanvasDeselect, onContextMenu, onDrop, onFileDragEnter, onFileDragLeave, onFileDragOver, graphicsLayer, children }: InfiniteCanvasProps) {
+    const colorTheme = useThemeStore((state) => state.theme);
+    const theme = canvasThemes[colorTheme];
+    const canvasBackground = colorTheme === "light" ? "#e6e6e6" : theme.canvas.background;
     const panState = useRef({
         isPanning: false,
         pointerId: -1,
@@ -191,8 +194,8 @@ export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "dots"
 
     const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
         const target = event.target instanceof Element ? event.target : null;
-        if (target?.closest("[data-canvas-no-zoom]")) return;
-        if (target?.closest("[data-connection-create-menu]")) return;
+        // AntD 浮层通过 Portal 渲染到节点 DOM 之外；若不统一排除，会被误判为画布空白并捕获指针。
+        if (target?.closest(CANVAS_POINTER_IGNORE_SELECTOR)) return;
         const isBackgroundClick = !target?.closest("[data-node-id],[data-connection-id]");
         const isTouch = event.pointerType === "touch";
 
@@ -371,7 +374,7 @@ export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "dots"
             ref={containerRef}
             className={`relative h-full w-full select-none overflow-hidden touch-none ${isPanning ? "cursor-grabbing" : boxSelectEnabled ? "cursor-crosshair" : "cursor-grab"}`}
             style={{
-                background: theme.canvas.background,
+                background: canvasBackground,
                 overscrollBehavior: "none",
                 "--canvas-live-x": `${viewport.x}px`,
                 "--canvas-live-y": `${viewport.y}px`,
@@ -382,7 +385,10 @@ export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "dots"
                 "--canvas-grid-size": `${48 * viewport.k}px`,
                 "--canvas-grid-x": `${viewport.x % (48 * viewport.k)}px`,
                 "--canvas-grid-y": `${viewport.y % (48 * viewport.k)}px`,
-                "--canvas-dot-size": viewport.k < 0.12 ? "0.8px" : "1.15px",
+                "--canvas-dot-grid-size": `${canvasDotGridPx(viewport.k)}px`,
+                "--canvas-dot-grid-x": `${viewport.x % canvasDotGridPx(viewport.k)}px`,
+                "--canvas-dot-grid-y": `${viewport.y % canvasDotGridPx(viewport.k)}px`,
+                "--canvas-dot-size": canvasDotPx(viewport.k),
             } as React.CSSProperties}
             onPointerDown={handlePointerDown}
             onDoubleClick={(event) => {
@@ -422,11 +428,11 @@ function CanvasGrid({ mode }: { mode: CanvasBackgroundMode }) {
             data-canvas-grid-layer
             className="pointer-events-none absolute"
             style={{
-                inset: "calc(-1 * var(--canvas-grid-size))",
+                inset: mode === "dots" ? "calc(-1 * var(--canvas-dot-grid-size))" : "calc(-1 * var(--canvas-grid-size))",
                 backgroundImage,
-                backgroundSize: "var(--canvas-grid-size) var(--canvas-grid-size)",
-                transform: "translate3d(var(--canvas-grid-x), var(--canvas-grid-y), 0)",
-                opacity: mode === "dots" ? 0.28 : 0.2,
+                backgroundSize: mode === "dots" ? "var(--canvas-dot-grid-size) var(--canvas-dot-grid-size)" : "var(--canvas-grid-size) var(--canvas-grid-size)",
+                transform: mode === "dots" ? "translate3d(var(--canvas-dot-grid-x), var(--canvas-dot-grid-y), 0)" : "translate3d(var(--canvas-grid-x), var(--canvas-grid-y), 0)",
+                opacity: mode === "dots" ? 0.34 : 0.46,
                 willChange: "transform",
             }}
         />

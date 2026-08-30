@@ -3,18 +3,26 @@ package model
 import "time"
 
 type Task struct {
-	ID                        string               `json:"id" gorm:"primaryKey;size:36"`
-	UserID                    string               `json:"userId" gorm:"index;size:36;index:idx_tasks_user_created,priority:1"`
-	SessionID                 string               `json:"sessionId" gorm:"index;size:36"`
-	ProjectID                 string               `json:"projectId" gorm:"index;size:80"`
-	Type                      string               `json:"type" gorm:"index;size:64"`
-	Status                    TaskStatus           `json:"status" gorm:"index;size:24;index:idx_tasks_status_created,priority:1;index:idx_tasks_claim,priority:1;index:idx_tasks_provider_cancel,priority:1"`
-	Stage                     string               `json:"stage" gorm:"size:80"`
-	Progress                  int                  `json:"progress"`
-	Prompt                    string               `json:"prompt"`
-	Operation                 string               `json:"operation" gorm:"size:64"`
-	Provider                  string               `json:"provider" gorm:"size:64"`
-	Model                     string               `json:"model" gorm:"size:120"`
+	ID                     string     `json:"id" gorm:"primaryKey;size:36"`
+	UserID                 string     `json:"userId" gorm:"index;size:36;index:idx_tasks_user_created,priority:1;index:idx_tasks_user_project_created,priority:1"`
+	TraceID                string     `json:"-" gorm:"index;size:96"`
+	RequestID              string     `json:"-" gorm:"index;size:96"`
+	SessionID              string     `json:"sessionId" gorm:"index;size:36"`
+	ProjectID              string     `json:"projectId" gorm:"index;size:80;index:idx_tasks_user_project_created,priority:2"`
+	Type                   string     `json:"type" gorm:"index;size:64"`
+	Status                 TaskStatus `json:"status" gorm:"index;size:24;index:idx_tasks_status_created,priority:1;index:idx_tasks_claim,priority:1;index:idx_tasks_provider_cancel,priority:1"`
+	Stage                  string     `json:"stage" gorm:"size:80"`
+	Progress               int        `json:"progress"`
+	Prompt                 string     `json:"prompt"`
+	Operation              string     `json:"operation" gorm:"size:64"`
+	Provider               string     `json:"provider" gorm:"size:64"`
+	Model                  string     `json:"model" gorm:"size:120"`
+	LogicalModelID         string     `json:"logicalModelId,omitempty" gorm:"size:36;index"`
+	LogicalModelRevisionID string     `json:"logicalModelRevisionId,omitempty" gorm:"size:36;index"`
+	RouteID                string     `json:"routeId,omitempty" gorm:"size:36;index"`
+	ChannelModelID         string     `json:"channelModelId,omitempty" gorm:"size:36;index"`
+	// RouteRun 只在用户主动重试时递增；worker 租约恢复不应创建新的路由选择世代。
+	RouteRun                  int                  `json:"-" gorm:"index"`
 	BillingOrderID            string               `json:"billingOrderId,omitempty" gorm:"index;size:36"`
 	ProviderRequestID         string               `json:"providerRequestId,omitempty" gorm:"index;size:160"`
 	ProviderCancelStatus      ProviderCancelStatus `json:"providerCancelStatus,omitempty" gorm:"index;size:24;index:idx_tasks_provider_cancel,priority:2"`
@@ -34,7 +42,7 @@ type Task struct {
 	Attempts                  int                  `json:"attempts"`
 	StartedAt                 *time.Time           `json:"startedAt"`
 	CompletedAt               *time.Time           `json:"completedAt"`
-	CreatedAt                 time.Time            `json:"createdAt" gorm:"index:idx_tasks_user_created,priority:2;index:idx_tasks_status_created,priority:2;index:idx_tasks_claim,priority:3"`
+	CreatedAt                 time.Time            `json:"createdAt" gorm:"index:idx_tasks_user_created,priority:2;index:idx_tasks_status_created,priority:2;index:idx_tasks_claim,priority:3;index:idx_tasks_user_project_created,priority:3"`
 	UpdatedAt                 time.Time            `json:"updatedAt"`
 }
 
@@ -76,6 +84,8 @@ type TaskLog struct {
 	ID        string    `json:"id" gorm:"primaryKey;size:36"`
 	UserID    string    `json:"userId" gorm:"index;size:36"`
 	TaskID    string    `json:"taskId" gorm:"index;size:36"`
+	TraceID   string    `json:"-" gorm:"index;size:96"`
+	RequestID string    `json:"-" gorm:"index;size:96"`
 	Level     string    `json:"level" gorm:"size:24"`
 	Message   string    `json:"message"`
 	Payload   string    `json:"payload" gorm:"type:text"`

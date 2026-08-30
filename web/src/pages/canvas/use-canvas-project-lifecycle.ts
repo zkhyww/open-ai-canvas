@@ -4,9 +4,10 @@ import { useNavigate } from "react-router";
 
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { removeCanvasDrawing } from "@/lib/canvas/canvas-drawing-storage";
+import { normalizeCanvasNodeTimestamps } from "@/lib/canvas/canvas-node-timestamps";
 import { hydrateAssistantImages, hydrateCanvasImages, resetInterruptedGeneration } from "@/lib/canvas/canvas-project-generation";
 import { listAddedSkills, type Skill } from "@/services/api/skills";
-import { createCanvasProjectWithRemoteSync, saveRemoteUserDataNow } from "@/services/user-data-sync";
+import { createCanvasProjectWithRemoteSync, deleteCanvasProjectsWithRemoteSync, saveRemoteUserDataNow } from "@/services/user-data-sync";
 import { flushCanvasStorePersistence, useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, CanvasNodeMetadata, ViewportTransform } from "@/types/canvas";
 import type { CanvasHistorySnapshot } from "./use-canvas-history";
@@ -70,7 +71,6 @@ export function useCanvasProjectLifecycle({
     const openProject = useCanvasStore((state) => state.openProject);
     const updateProject = useCanvasStore((state) => state.updateProject);
     const renameProject = useCanvasStore((state) => state.renameProject);
-    const deleteProjects = useCanvasStore((state) => state.deleteProjects);
     const currentProject = useCanvasStore((state) => state.projects.find((project) => project.id === projectId));
     const [addedSkills, setAddedSkills] = useState<Skill[]>([]);
     const viewportSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -110,7 +110,10 @@ export function useCanvasProjectLifecycle({
         };
 
         const restore = async () => {
-            const initialNodes = resetInterruptedGeneration(project.nodes);
+            const initialNodes = normalizeCanvasNodeTimestamps(resetInterruptedGeneration(project.nodes), {
+                createdAt: project.createdAt,
+                updatedAt: project.updatedAt,
+            });
             const initialSessions = project.chatSessions || [];
 
             // 先恢复可交互的节点和布局，媒体缓存/资源校验放到后台，避免首屏被远程资源拖住。
@@ -172,22 +175,27 @@ export function useCanvasProjectLifecycle({
         });
     }, [message, navigate]);
 
-    const deleteCurrentProject = useCallback(() => {
+    const deleteCurrentProject = useCallback(async () => {
         const drawingIds = nodesRef.current.flatMap((node) => node.type === "drawing" && node.metadata?.drawingId ? [node.metadata.drawingId] : []);
+        try {
+            await deleteCanvasProjectsWithRemoteSync([projectId]);
+        } catch (error) {
+            message.error(error instanceof Error ? `删除画布失败：${error.message}` : "删除画布失败，请稍后重试");
+            return;
+        }
         if (drawingIds.length) {
             void Promise.all(drawingIds.map((drawingId) => removeCanvasDrawing(projectId, drawingId)))
                 .catch(() => message.warning("项目已删除，但部分本地绘图缓存清理失败"));
         }
-        deleteProjects([projectId]);
         cleanupAssetImages();
         navigate("/canvas");
-    }, [cleanupAssetImages, deleteProjects, message, navigate, nodesRef, projectId]);
+    }, [cleanupAssetImages, message, navigate, nodesRef, projectId]);
 
     const renameCurrentProject = useCallback((title: string) => {
         renameProject(projectId, title);
     }, [projectId, renameProject]);
 
-    const saveCanvasProject = useCallback(async () => {
+    const saveCanvasProject = useCallback(async (): Promise<boolean> => {
         try {
             updateProject(projectId, {
                 nodes: nodesRef.current,
@@ -202,7 +210,7 @@ export function useCanvasProjectLifecycle({
             await flushCanvasStorePersistence();
         } catch {
             message.error("画布保存失败，请稍后重试");
-            return;
+            return false;
         }
         try {
             await saveRemoteUserDataNow();
@@ -211,6 +219,7 @@ export function useCanvasProjectLifecycle({
             const detail = error instanceof Error ? error.message : "未知错误";
             message.warning(`本地画布布局已保存，云端同步失败：${detail}`);
         }
+        return true;
     }, [activeChatId, backgroundMode, chatSessions, connectionsRef, currentProject?.directorScenes, message, nodesRef, projectId, showImageInfo, updateProject, viewportRef]);
 
     const clearCanvasFiles = useCallback(() => {

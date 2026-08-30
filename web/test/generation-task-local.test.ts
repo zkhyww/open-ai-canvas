@@ -36,6 +36,11 @@ test("Dreamina submit failure categories have bounded user-facing messages", () 
     }
 });
 
+test("resource storage 403 is not reported as generation channel authentication", () => {
+    const raw = "参考图片上传失败：OSS 上传失败：403 Forbidden <Code>UserDisable</Code><Message>UserDisable</Message>";
+    expect(generationErrorMessage(raw)).toBe("对象存储账号已停用，请检查或更换对象存储配置。");
+});
+
 test("durable Dreamina submit failures keep their stable user-facing category in task center", () => {
     const task = projectLocalDreaminaTask({
         id: "dreamina-submit-timeout-task-0001",
@@ -123,6 +128,11 @@ test("task display does not claim a submitted Dreamina receipt is actively gener
     expect(generationTaskStageLabel(officialCompleted)).toBe("官方返回状态：completed");
     expect(generationTaskStatusLabel(generating)).toBe("生成中");
     expect(generationTaskShowsProgress(generating)).toBe(true);
+
+    for (const stage of ["等待队列调度", "后端接管任务", "正在连接上游", "调用生成模型"]) {
+        expect(generationTaskShowsProgress({ ...generating, provider: "managed", stage })).toBe(false);
+    }
+    expect(generationTaskShowsProgress({ ...generating, provider: "managed", stage: "上游生成中" })).toBe(true);
     expect(generationTaskStatusLabel(remoteRunning)).toBe("生成中");
 });
 
@@ -151,7 +161,7 @@ test("Dreamina submission uncertainty is not an accepted background task", () =>
     expect(localDreaminaCancellationCopy(uncertain)).toBeUndefined();
 });
 
-test("Canvas task surfaces route Dreamina uncertainty through shared display semantics", async () => {
+test("Canvas task surfaces route Dreamina uncertainty through shared display semantics without cancellation", async () => {
     const [nodeSource, detailSource, scriptSource, taskCenterSource, createSource] = await Promise.all([
         Bun.file(new URL("../src/components/canvas/canvas-node-content.tsx", import.meta.url)).text(),
         Bun.file(new URL("../src/pages/canvas/canvas-project-status-dialogs.tsx", import.meta.url)).text(),
@@ -161,30 +171,8 @@ test("Canvas task surfaces route Dreamina uncertainty through shared display sem
     ]);
     expect(nodeSource).toContain("generationTaskStageLabel(displayTask)");
     expect(nodeSource).toContain("generationTaskShowsProgress(displayTask)");
-    const loadingContentSource = sourceSection(nodeSource, "function LoadingContent(", "function useTaskElapsed(");
-    const cancelBranchStart = loadingContentSource.indexOf("{!submissionUncertain ? (");
-    const cancelBranchEndMarker = ") : null}";
-    const cancelBranchEnd = loadingContentSource.indexOf(cancelBranchEndMarker, cancelBranchStart);
-    expect(cancelBranchStart).toBeGreaterThanOrEqual(0);
-    expect(cancelBranchEnd).toBeGreaterThan(cancelBranchStart);
-
-    const cancelBranchSource = loadingContentSource.slice(cancelBranchStart, cancelBranchEnd + cancelBranchEndMarker.length);
-    const cancelButtonStart = cancelBranchSource.indexOf("<button");
-    const cancelButtonEndMarker = "</button>";
-    const cancelButtonEnd = cancelBranchSource.indexOf(cancelButtonEndMarker, cancelButtonStart);
-    expect(cancelButtonStart).toBeGreaterThan(0);
-    expect(cancelButtonEnd).toBeGreaterThan(cancelButtonStart);
-    expect(cancelBranchSource.slice(0, cancelButtonStart)).toBe("{!submissionUncertain ? ( ");
-
-    const cancelButtonSource = cancelBranchSource.slice(cancelButtonStart, cancelButtonEnd + cancelButtonEndMarker.length);
-    const onClickStart = cancelButtonSource.indexOf("onClick={(event) => {");
-    const onClickEnd = cancelButtonSource.indexOf("}}", onClickStart);
-    expect(cancelButtonSource).toContain("<button");
-    expect(onClickStart).toBeGreaterThanOrEqual(0);
-    expect(onClickEnd).toBeGreaterThan(onClickStart);
-    expect(cancelButtonSource.slice(onClickStart, onClickEnd)).toContain("onCancelTask?.(node);");
-    expect(cancelButtonSource).toContain("<Square");
-    expect(cancelButtonSource).toContain("取消");
+    expect(nodeSource).not.toContain("onCancelTask");
+    expect(nodeSource).not.toContain("取消生成");
     expect(nodeSource).not.toContain('node.metadata?.taskStage || (taskId ? "任务处理中" : "正在创建任务")');
     expect(detailSource).toContain("generationTaskStageLabel(task)");
     expect(detailSource).toContain("generationTaskShowsProgress(task) ? <TaskDetailItem");
@@ -193,13 +181,21 @@ test("Canvas task surfaces route Dreamina uncertainty through shared display sem
     expect(scriptSource).toContain("generationTaskShowsProgress(displayTask)");
     expect(scriptSource).not.toContain('node.metadata.taskStage || "正在创建任务"');
     expect(nodeSource).toContain("isGenerationTaskSubmissionUncertain(errorDisplayTask)");
-    expect(taskCenterSource).toContain('if (action === "retry" && currentTask && isGenerationTaskSubmissionUncertain(currentTask))');
+    expect(taskCenterSource).toContain("if (currentTask && isGenerationTaskSubmissionUncertain(currentTask))");
     expect(taskCenterSource).toContain("不能自动重试；请先核对官方状态，避免重复生成");
-    expect(taskCenterSource).toContain('onRetry={() => void runAction(task.id, "retry")}');
+    expect(taskCenterSource).toContain("onRetry={() => void runAction(task.id)}");
     expect(taskCenterSource).toContain("<TaskListRow");
     expect(taskCenterSource).toContain("<TaskGridCard");
     expect(createSource).not.toContain('item.generationStage === "submission_unknown"');
     expect(createSource).not.toContain('generationStage === "submission_unknown" ? "cancelled"');
+});
+
+test("Canvas fullscreen video restores large controls instead of keeping the compact node layout", async () => {
+    const playerCSS = await Bun.file(new URL("../src/components/video-player.css", import.meta.url)).text();
+    expect(playerCSS).toContain(".canvas-video-player-compact:not([data-fullscreen])");
+    expect(playerCSS).toContain("--media-fullscreen-button-size: 60px");
+    expect(playerCSS).toContain("--media-slider-track-height: 8px");
+    expect(playerCSS).toContain("min-height: 64px");
 });
 
 test("task center deletion accepts only local Dreamina records", async () => {
@@ -209,7 +205,7 @@ test("task center deletion accepts only local Dreamina records", async () => {
     const deleteActionSource = sourceSection(source, "const deleteLocalTask =", "const refreshLocalTaskStatus =");
 
     expect(compactedSource).toMatch(/\{detailTask\.provider === "dreamina-cli" \? \( <Button .*?aria-label="删除本机记录".*?onClick=\{\(\) => deleteLocalTask\(detailTask\)\}> 删除本机记录 <\/Button> \) : null\}/);
-    expect(compactedSource).toContain("任务已由官方接受；删除后仍会在后台同步官方状态。");
+    expect(compactedSource).toContain("官方状态采用最终一致轮询；转入后台后仍会继续等待并同步官方状态。");
     expect(deleteActionSource).toContain("await deleteGenerationTask(task.id);");
 });
 
@@ -1336,6 +1332,15 @@ test("remote image video and audio references keep Backend parity without Dreami
             operation: "reference_to_video",
         },
         {
+            mode: "video" as const,
+            references: {
+                referenceImages: [{ id: "remote-image-audio-image-0001", name: "reference.png", type: "image/png", dataUrl: "", storageKey: "resource:remote-image-audio-image-0001" }],
+                referenceAudios: [{ id: "remote-image-audio-audio-0001", name: "reference.mp3", type: "audio/mpeg", url: "", storageKey: "resource:remote-image-audio-audio-0001" }],
+            },
+            result: { mode: "video", video: { dataUrl: "opaque://video", storageKey: "resource:remote-image-audio-output" } },
+            operation: "image_to_video",
+        },
+        {
             mode: "audio" as const,
             references: { referenceAudios: [{ id: "remote-audio-0001", name: "audio.mp3", type: "audio/mpeg", url: "", storageKey: "resource:remote-audio-0001" }] },
             result: { mode: "audio", audio: { dataUrl: "opaque://audio", storageKey: "resource:remote-audio-output" } },
@@ -1694,7 +1699,7 @@ test("Create audio upload converts, previews, removes, and submits through the s
         operation?: string;
         input?: { referenceAudios?: Array<Record<string, unknown>> };
     };
-    expect(submitted.operation).toBe("reference_to_video");
+    expect(submitted.operation).toBe("audio_to_video");
     expect(submitted.input?.referenceAudios).toEqual([
         {
             id: attachment.id,
